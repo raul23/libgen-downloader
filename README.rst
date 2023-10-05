@@ -1,4 +1,4 @@
-==============
-ebooks-manager
-==============
+=============
+manage-ebooks
+=============
 Manage ebooks databases and more
