@@ -1,4 +1,4 @@
-=============
-manage-ebooks
-=============
-Manage ebooks databases and more
+===============
+download-ebooks
+===============
+Download ebooks from Library Genesis (libgen)
