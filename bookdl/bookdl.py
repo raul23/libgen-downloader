@@ -1,3 +1,4 @@
+import logging
 import queue
 import sqlite3
 import threading
@@ -8,17 +9,30 @@ from tkinter import ttk
 
 import ipdb
 
+logger = logging.getLogger("bookdl")
+
+
+class TKTextHandler(logging.Handler):
+    def __init__(self, tktext):
+        super().__init__()
+        self.tktext = tktext
+
+    def emit(self, record):
+        msg = self.format(record)
+        self.tktext.insert("end", msg+'\n')
+
 
 class EbookDownloader:
     def __init__(self, root):
         self.root = root
         self.root.title("Ebook Downloader")
         self.search_entry = None
+        # TODO: table instead of tree
         self.search_tree = None
         self.selected_items_from_search_tree = set()
         self.selected_items_from_download_tree = set()
         self.download_tree = None
-        self.logging_tree = None
+        self.logging_text = None
         self.filenames = set()
         self.gui_update_queue = queue.Queue()
         self.nb_threads = 0
@@ -88,6 +102,19 @@ class EbookDownloader:
         # Create GUI elements
         self.create_widgets()
 
+        self.setup_logger()
+
+    def setup_logger(self):
+        logger.setLevel(logging.DEBUG)
+
+        handler = TKTextHandler(self.logging_text)
+        # '%(asctime)s - %(levelname)s - %(message)s'
+        formatter = logging.Formatter('%(levelname)s - %(message)s')
+        handler.setFormatter(formatter)
+
+        # Add the handler to the logger
+        logger.addHandler(handler)
+
     def gui_update_thread(self):
         while True:
             try:
@@ -100,8 +127,14 @@ class EbookDownloader:
 
     # Update the GUI based on the received update. It is done from the main thread
     def update_gui(self, update):
-        filename, size, mirror, progress, status, speed, eta = update
-        self.update_download_status(filename, size, mirror, progress, status, speed, eta)
+        if len(update) == 7:
+            # Update the Download tree
+            filename, size, mirror, progress, status, speed, eta = update
+            self.update_download_status(filename, size, mirror, progress, status, speed, eta)
+        else:
+            # Update the Log text
+            msg = update
+            self.update_log_table(msg)
 
     def create_widgets(self):
         # Search Entry and Button
@@ -125,15 +158,28 @@ class EbookDownloader:
         self.download_tree.bind('<ButtonRelease-1>', self.select_items_from_download_tree)
         self.download_tree.bind('<Button-2>', self.show_popup_menu_for_download_table)
 
+        # Lgging text with horizontal scrollbar
+        self.logging_text = tk.Text(self.root, wrap='none', width=40, height=10)
+        scrollbar = tk.Scrollbar(self.root, orient='horizontal', command=self.logging_text.xview)
+        self.logging_text.configure(xscrollcommand=scrollbar.set, yscrollcommand=None)
+        self.logging_text.grid(row=2, column=1, padx=10, pady=10, sticky="nsew")
+        scrollbar.grid(row=3, column=1, padx=10, pady=10, sticky="ew")
+
         # Logging Table
+        """
         columns = {'Log': 350}
-        self.logging_tree = self.create_table(columns)
+        self.logging_tree = self.create_table(columns, anchor='w')
         self.logging_tree.grid(row=2, column=1, padx=10, pady=10, sticky="nsew")
 
-        # TODO: remove code for download button
-        # Download Button
-        # download_button = tk.Button(self.root, text="Download Selected", command=self.download_selected)
-        # download_button.grid(row=3, column=0, padx=5, pady=10, sticky="w")
+        # Horizontal Scrollbar
+        horizontal_scrollbar = ttk.Scrollbar(self.root, orient='horizontal', command=self.logging_tree.xview)
+        self.logging_tree.configure(xscrollcommand=horizontal_scrollbar.set)
+        horizontal_scrollbar.grid(row=3, column=1, padx=10, pady=10, sticky="ew")
+        """
+
+        # Clear all Button
+        clear_all_button = tk.Button(self.root, text="Clear all", command=self.clear_all)
+        clear_all_button.grid(row=3, column=0, padx=5, pady=0, sticky="nsew")
 
         # Configure column weights to adjust spacing
         # Configure row and column weights to make tables expand
@@ -166,15 +212,15 @@ class EbookDownloader:
         self.selected_items_from_download_tree.clear()
         self.selected_items_from_download_tree = set(self.download_tree.selection())
 
-    def create_table(self, columns):
+    def create_table(self, columns, anchor='center'):
         tree = ttk.Treeview(self.root, columns=list(columns.keys()), show="headings")
         for col_name, col_width in columns.items():
             tree.heading(col_name, text=col_name)
-            tree.column(col_name, width=col_width, anchor='center')
+            tree.column(col_name, width=col_width, anchor=anchor)
         return tree
 
     def download_selected(self, mirror):
-        print(f"Downloading with {mirror}")
+        logger.debug(f"Downloading {len(self.selected_items_from_search_tree)} file(s) with {mirror}")
         for item in self.selected_items_from_search_tree:
             i = 1
             # TODO: only retrieve info that is needed
@@ -196,25 +242,27 @@ class EbookDownloader:
 
             # Start download in a separate thread
             if not add_to_queue and self.nb_threads < 6:
-                print('creating thread')
-                thread = threading.Thread(target=self.download_ebook, args=(filename, size, mirror))
+                th_name = f"Thread-{self.nb_threads + 1}"
+                thread = threading.Thread(target=self.download_ebook, args=(filename, size, mirror, th_name))
                 self.filenames_by_threads[filename] = thread
                 thread.daemon = True
                 thread.start()
                 self.nb_threads += 1
+                self.gui_update_queue.put(f'Thread created: {th_name}')
 
                 # Update mirror counter without holding the lock
                 self.update_mirror_counter_with_lock(mirror, 1)
             else:
-                print(f'Adding work to download queue: filename={filename} and {mirror}')
+                self.gui_update_queue.put(f'Adding work to download queue: filename={filename} and {mirror}')
                 with self.lock_download_queue:
                     self.shared_download_queue.append((filename, size, mirror))
 
     # Worker thread
-    def download_ebook(self, filename, size, mirror):
-        th_id = threading.current_thread().ident
+    def download_ebook(self, filename, size, mirror, th_name):
+        # th_id = threading.current_thread().ident
+        threading.current_thread().setName(th_name)
         stop = False
-        print(f'{th_id}: starting first download with filename={filename} and {mirror}')
+        logger.debug(f'{th_name}: starting first download with filename={filename} and {mirror}')
         while True:
             # Simulate download progress
             for progress in range(1, 101):
@@ -222,19 +270,19 @@ class EbookDownloader:
                 eta = 100 - progress
                 self.gui_update_queue.put((filename, size, mirror, f"{progress}%", "Downloading", "1 Mb/s", f"{eta} s"))
                 with self.lock_stop_thread:
-                    if th_id in self.shared_stop_thread:
-                        print(f"{th_id}: thread will stop what it is doing...")
+                    if th_name in self.shared_stop_thread:
+                        logger.debug(f"{th_name}: thread will stop what it is doing")
                         stop = True
-                        self.shared_stop_thread.remove(th_id)
+                        self.shared_stop_thread.remove(th_name)
                         break
             if not stop:
                 # Update status to indicate download completion
-                print(f'{th_id}: finished downloading and updating status with filename={filename} and {mirror}')
+                logger.debug(f'{th_name}: finished downloading and updating status with filename={filename} and {mirror}')
                 self.gui_update_queue.put((filename, size, mirror, "100%", "Downloaded", "-", "-"))
             else:
                 stop = False
             self.update_mirror_counter_with_lock(mirror, -1)
-            print(f'{th_id}: thread waiting for work...')
+            logger.debug(f'{th_name}: thread waiting for work...')
             while True:
                 # Get the next ebook to download from the top of the download queue
                 # i.e. the least recent ebook added
@@ -249,7 +297,7 @@ class EbookDownloader:
                                 break
                     else:
                         time.sleep(0.1)
-            print(f'{th_id}: starting new download with filename={filename} and {mirror}')
+            logger.debug(f'{th_name}: starting new download with filename={filename} and {mirror}')
 
     # Update mirror counter with the appropriate lock
     def update_mirror_counter_with_lock(self, mirror, value):
@@ -276,8 +324,13 @@ class EbookDownloader:
                 try:
                     self.download_tree.item(child, values=(filename, size, mirror, progress, status, speed, eta))
                 except:
+                    # TODO: remove try-except block
                     ipdb.set_trace()
                 break
+
+    @staticmethod
+    def update_log_table(msg):
+        logger.debug(msg)
 
     def show_popup_menu_for_search_table(self, event):
         menu = tk.Menu(self.root, tearoff=0)
@@ -295,24 +348,27 @@ class EbookDownloader:
         menu.post(event.x_root, event.y_root)
 
     def pause_download(self):
-        print('Pause Download')
+        logger.debug('Pause Download')
 
     def resume_download(self):
-        print('Resume Download')
+        logger.debug('Resume Download')
 
     def cancel_download(self):
-        print('Cancel Download')
+        logger.debug('Cancel Download')
+
+    def clear_all(self):
+        logger.debug('Clear all')
 
     def remove_download(self):
         if self.download_tree.get_children() == ():
-            print('Download queue is empty!')
+            logger.info('Download queue is empty!')
         elif self.selected_items_from_download_tree == set():
-            print('No selected rows!')
+            logger.info('No selected rows!')
         else:
-            print('Remove items from the Download queue')
+            logger.debug('Remove items from the Download queue')
             for item in self.selected_items_from_download_tree:
                 filename = self.download_tree.item(item, "values")[0]
-                print(f'Removing {filename}')
+                logger.debug(f'Removing {filename}')
                 if self.filenames_by_threads.get(filename, False):
                     thread = self.filenames_by_threads[filename]
                     with self.lock_stop_thread:
@@ -322,7 +378,7 @@ class EbookDownloader:
             self.selected_items_from_download_tree.clear()
 
     def show_in_finder(self):
-        print('Show in Finder')
+        logger.debug('Show in Finder')
 
 
 if __name__ == "__main__":
