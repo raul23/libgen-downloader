@@ -192,6 +192,9 @@ class EbookDownloader:
             if level_name == "Debug":
                 var.set(1)
 
+        self.context_menu.add_separator()
+        self.context_menu.add_command(label="Clear all logs", command=self.clear_all_logs)
+
         # Bind the right-click event to the text widget
         # TODO: on Linux it is <Button-3>, on macOS it is <Button-2>
         self.logging_text.bind("<Button-2>", self.show_popup_menu_for_logging_text)
@@ -210,8 +213,8 @@ class EbookDownloader:
         """
 
         # Clear all Button
-        clear_all_button = tk.Button(self.root, text='Clear all', command=self.clear_all)
-        clear_all_button.grid(row=3, column=0, padx=5, pady=0, sticky='nsew')
+        clear_downloads_button = tk.Button(self.root, text='Clear downloads', command=self.clear_downloads())
+        clear_downloads_button.grid(row=3, column=0, padx=5, pady=0, sticky='nsew')
 
         # Configure column weights to adjust spacing
         # Configure row and column weights to make tables expand
@@ -430,6 +433,9 @@ class EbookDownloader:
                 return level_name.upper()
         return None
 
+    def clear_all_logs(self):
+        self.logging_text.delete("1.0", tk.END)
+
     def pause_download(self):
         logger.debug("Pause Download")
 
@@ -439,8 +445,8 @@ class EbookDownloader:
     def cancel_download(self):
         logger.debug("Cancel Download")
 
-    def clear_all(self):
-        logger.debug("Clear all")
+    def clear_downloads(self):
+        logger.debug("Clear downloads")
 
     def remove_download(self):
         if self.download_tree.get_children() == ():
