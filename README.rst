@@ -58,3 +58,13 @@ Canceling downloads
 
 Logging
 -------
+
+Changelogs
+==========
+
+Credits
+=======
+
+License
+=======
+This program is licensed under the MIT License. For more details see the `LICENSE <./LICENSE>`_ file in the repository.
