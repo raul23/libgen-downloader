@@ -44,6 +44,17 @@ Uninstall
 
 Application usage
 =================
+Searching books
+---------------
 
-Examples
-========
+Downloading books
+-----------------
+
+Pausing/Resuming downloads
+--------------------------
+
+Canceling downloads
+-------------------
+
+Logging
+-------
