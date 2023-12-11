@@ -1,6 +1,6 @@
-=================
-libgen-downloader
-=================
+====================================
+libgen-downloader (WORK-IN-PROGRESS)
+====================================
 Download books from Library Genesis (libgen)
 
 .. contents:: **Contents**
@@ -33,11 +33,52 @@ Description
 
 Dependencies
 ============
+* **Platforms:** Linux, macOS
+* **Python**: >=3.8
 
 Installation instructions
 =========================
 Install
 -------
+1. It is highly recommended to install ``bookdl`` in a virtual
+   environment using for example `venv`_ or `conda`_.
+
+2. Make sure to update *pip*::
+
+   $ pip install --upgrade pip
+
+3. Install the package ``bookdl`` (released version **0.1.0a0**) with
+   *pip*::
+
+   $ pip install git+https://github.com/raul23/libgen-downloader@v0.1.0a0#egg=libgen-downloader
+
+   It will install the dependencies if they are not already found in your system.
+
+`:warning:`
+
+   Make sure that *pip* is working with the correct Python version. It might be
+   the case that *pip* is using Python 2.x You can find what Python version
+   *pip* uses with the following::
+
+      $ pip -V
+
+   If *pip* is working with the wrong Python version, then try to use *pip3*
+   which works with Python 3.x
+
+`:information_source:`
+
+   To install the **bleeding-edge version** of the ``darth_vader_rpi`` package::
+
+      $ pip install git+https://github.com/raul23/libgen-downloader#egg=libgen-downloader
+
+   However, this latest version is not as stable as the released version but you
+   get the latest features being implemented.
+
+**Test installation**
+
+Test your installation by importing ``bookdl`` and printing its version::
+
+   $ python -c "import bookdl; print(bookdl.__version__)"
 
 Uninstall
 ---------
@@ -67,4 +108,9 @@ Credits
 
 License
 =======
-This program is licensed under the MIT License. For more details see the `LICENSE <./LICENSE>`_ file in the repository.
+This program is licensed under the MIT License. For more details see the `LICENSE`_ file in the repository.
+
+.. URLs
+.. _conda: https://docs.conda.io/en/latest/
+.. _venv: https://docs.python.org/3/library/venv.html
+.. LICENSE: ./LICENSE
