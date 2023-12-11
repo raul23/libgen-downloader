@@ -34,7 +34,7 @@ Description
 Dependencies
 ============
 * **Platforms:** Linux, macOS
-* **Python**: >=3.8
+* **Python** >=3.8
 * `Beautiful Soup`_
 * `pyrfc6266`_
 * `Requests`_
