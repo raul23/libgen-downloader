@@ -37,10 +37,10 @@ Dependencies
 Installation instructions
 =========================
 Install
-=======
+-------
 
 Uninstall
-=========
+---------
 
 Application usage
 =================
