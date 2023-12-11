@@ -1,4 +1,4 @@
 =================
 libgen-downloader
 =================
-Download ebooks from Library Genesis (libgen)
+Download books from Library Genesis (libgen)
