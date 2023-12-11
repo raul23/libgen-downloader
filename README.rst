@@ -35,9 +35,11 @@ Dependencies
 ============
 * **Platforms:** Linux, macOS
 * **Python** >=3.8
-* `Beautiful Soup`_
-* `pyrfc6266`_
-* `Requests`_
+* **Python packages:**
+  
+  * `Beautiful Soup`_
+  * `pyrfc6266`_
+  * `Requests`_
 
 Installation instructions
 =========================
