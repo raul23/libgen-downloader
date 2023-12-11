@@ -7,7 +7,7 @@ Download books from Library Genesis (libgen)
 
   **Disclaimer**
 
-  This ebook downloader application is intended for personal, educational, and fair use purposes only. The developer and 
+  This application is intended for personal, educational, and fair use purposes only. The developer and 
   contributors to this application do not endorse or encourage the illegal downloading or distribution of copyrighted 
   materials. Users are solely responsible for ensuring that their use of this application complies with applicable 
   copyright laws and regulations.
