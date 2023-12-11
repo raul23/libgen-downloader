@@ -36,6 +36,7 @@ Dependencies
 * **Platforms:** Linux, macOS
 * **Python**: >=3.8
 * `Beautiful Soup`_
+* `Requests`_
 
 Installation instructions
 =========================
@@ -124,3 +125,4 @@ This program is licensed under the MIT License. For more details see the `LICENS
 .. _venv: https://docs.python.org/3/library/venv.html
 .. _Beautiful Soup: https://www.crummy.com/software/BeautifulSoup/
 .. _LICENSE: ./LICENSE
+.. _Requests: https://requests.readthedocs.io/en/latest/
