@@ -3,6 +3,13 @@ libgen-downloader
 =================
 Download books from Library Genesis (libgen)
 
+.. contents:: **Contents**
+   :depth: 3
+   :local:
+   :backlinks: top
+
+Disclaimer
+==========
 `:warning:`
 
   **Disclaimer**
