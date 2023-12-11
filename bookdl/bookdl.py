@@ -10,6 +10,7 @@ from tkinter import messagebox, ttk
 import ipdb
 
 logger = logging.getLogger("bookdl")
+DEFAULT_LOGGING_LEVEL = 'Info'
 
 
 class TKTextHandler(logging.Handler):
@@ -120,13 +121,13 @@ class EbookDownloader:
         self.logger_is_setup = True
 
     def setup_logger(self):
-        logger.setLevel(logging.DEBUG)
+        logger.setLevel(DEFAULT_LOGGING_LEVEL.upper())
 
         handler = TKTextHandler(self.logging_text)
         # '%(asctime)s - %(levelname)s - %(message)s'
         formatter = logging.Formatter('%(levelname)s - %(message)s')
         handler.setFormatter(formatter)
-        handler.setLevel(logging.DEBUG)
+        handler.setLevel(DEFAULT_LOGGING_LEVEL.upper())
 
         # Add the handler to the logger
         logger.addHandler(handler)
@@ -193,7 +194,7 @@ class EbookDownloader:
             self.context_menu.add_checkbutton(label=level_name, variable=var,
                                               command=lambda level=level_name: self.set_logging_level(level))
             # Set default check state
-            if level_name == "Debug":
+            if level_name == DEFAULT_LOGGING_LEVEL:
                 var.set(1)
 
         self.context_menu.add_separator()
