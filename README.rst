@@ -35,6 +35,7 @@ Dependencies
 ============
 * **Platforms:** Linux, macOS
 * **Python**: >=3.8
+* `Beautiful Soup`_
 
 Installation instructions
 =========================
@@ -121,4 +122,5 @@ This program is licensed under the MIT License. For more details see the `LICENS
 .. URLs
 .. _conda: https://docs.conda.io/en/latest/
 .. _venv: https://docs.python.org/3/library/venv.html
+** Beautiful Soup: https://www.crummy.com/software/BeautifulSoup/
 .. LICENSE: ./LICENSE
