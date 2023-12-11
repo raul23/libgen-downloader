@@ -47,12 +47,11 @@ Install
 
    $ pip install --upgrade pip
 
-3. Install the package ``bookdl`` (released version **0.1.0a0**) with
-   *pip*::
+.. 3. Install the package ``bookdl`` (released version **0.1.0a0**) with *pip*::
 
-   $ pip install git+https://github.com/raul23/libgen-downloader@v0.1.0a0#egg=libgen-downloader
+   .. $ pip install git+https://github.com/raul23/libgen-downloader@v0.1.0a0#egg=libgen-downloader
 
-   It will install the dependencies if they are not already found in your system.
+   .. It will install the dependencies if they are not already found in your system.
 
 `:warning:`
 
@@ -65,20 +64,20 @@ Install
    If *pip* is working with the wrong Python version, then try to use *pip3*
    which works with Python 3.x
 
-`:information_source:`
+.. `:information_source:`
 
-   To install the **bleeding-edge version** of the ``darth_vader_rpi`` package::
+   .. To install the **bleeding-edge version** of the ``darth_vader_rpi`` package::
 
-      $ pip install git+https://github.com/raul23/libgen-downloader#egg=libgen-downloader
+      .. $ pip install git+https://github.com/raul23/libgen-downloader#egg=libgen-downloader
 
-   However, this latest version is not as stable as the released version but you
-   get the latest features being implemented.
+   .. However, this latest version is not as stable as the released version but you
+   .. get the latest features being implemented.
 
-**Test installation**
+.. **Test installation**
 
-Test your installation by importing ``bookdl`` and printing its version::
+.. Test your installation by importing ``bookdl`` and printing its version::
 
-   $ python -c "import bookdl; print(bookdl.__version__)"
+   .. $ python -c "import bookdl; print(bookdl.__version__)"
 
 Uninstall
 ---------
