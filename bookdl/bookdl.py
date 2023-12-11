@@ -49,12 +49,16 @@ class EbookDownloader:
         self.shared_nb_mirror1 = 0
         self.shared_nb_mirror2 = 0
         self.shared_download_queue = []
+        self.shared_pause_thread = set()
+        self.shared_resume_thread = set()
         self.shared_stop_thread = set()
 
         # Separate locks for different resources
         self.lock_mirror1 = threading.Lock()
         self.lock_mirror2 = threading.Lock()
         self.lock_download_queue = threading.Lock()
+        self.lock_pause_thread = threading.Lock()
+        self.lock_resume_thread = threading.Lock()
         self.lock_stop_thread = threading.Lock()
 
         # Create and connect to SQLite database
@@ -133,7 +137,7 @@ class EbookDownloader:
                 # Get updates from the queue
                 update = self.gui_update_queue.get(timeout=1)
                 # Update the GUI from the main thread
-                self.root.after(0, self.update_gui, update)
+                self.root.after(100, self.update_gui, update)
             except queue.Empty:
                 pass
 
@@ -213,7 +217,7 @@ class EbookDownloader:
         """
 
         # Clear all Button
-        clear_downloads_button = tk.Button(self.root, text='Clear downloads', command=self.clear_downloads())
+        clear_downloads_button = tk.Button(self.root, text='Clear downloads', command=self.clear_downloads)
         clear_downloads_button.grid(row=3, column=0, padx=5, pady=0, sticky='nsew')
 
         # Configure column weights to adjust spacing
@@ -280,7 +284,6 @@ class EbookDownloader:
             if not add_to_queue and self.nb_threads < 6:
                 th_name = f"Thread-{self.nb_threads + 1}"
                 thread = threading.Thread(target=self.download_ebook, args=(filename, size, mirror, th_name))
-                self.filenames_by_threads[filename] = thread
                 thread.daemon = True
                 thread.start()
                 self.nb_threads += 1
@@ -295,13 +298,15 @@ class EbookDownloader:
 
     # Worker thread
     def download_ebook(self, filename, size, mirror, th_name):
-        # th_id = threading.current_thread().ident
-        threading.current_thread().setName(th_name)
+        thread = threading.current_thread()
+        thread.setName(th_name)
+        # th_id = thread.ident
         stop = False
         self.gui_update_queue.put((f"{th_name}: starting first download "
                                    f"with filename={filename} and {mirror}", "debug"))
         while True:
             # Simulate download progress
+            self.filenames_by_threads[filename] = thread
             for progress in range(1, 101):
                 time.sleep(0.1)
                 eta = 100 - progress
@@ -312,6 +317,34 @@ class EbookDownloader:
                         stop = True
                         self.shared_stop_thread.remove(th_name)
                         break
+                pause = False
+                with self.lock_pause_thread:
+                    if th_name in self.shared_pause_thread:
+                        self.gui_update_queue.put((f"{th_name}: thread will pause what it is doing", "debug"))
+                        self.gui_update_queue.put(
+                            (filename, size, mirror, f"{progress}%", "Paused", "-", "-"))
+                        self.shared_pause_thread.remove(th_name)
+                        pause = True
+                if pause:
+                    while True:
+                        # self.gui_update_queue.put((f"{th_name}: thread will sleep", "debug"))
+                        time.sleep(0.1)
+                        # self.gui_update_queue.put((f"{th_name}: thread will check if it can resume", "debug"))
+                        with self.lock_resume_thread:
+                            if th_name in self.shared_resume_thread:
+                                self.gui_update_queue.put(
+                                    (f"{th_name}: thread will resume what it was doing", "debug"))
+                                self.shared_resume_thread.remove(th_name)
+                                break
+                        # TODO: factorization, code block used above
+                        with self.lock_stop_thread:
+                            if th_name in self.shared_stop_thread:
+                                self.gui_update_queue.put((f"{th_name}: thread will stop what it was doing", "debug"))
+                                stop = True
+                                self.shared_stop_thread.remove(th_name)
+                                break
+                if stop:
+                    break
             if not stop:
                 # Update status to indicate download completion
                 self.gui_update_queue.put((f"{th_name}: finished downloading "
@@ -320,6 +353,7 @@ class EbookDownloader:
                 self.gui_update_queue.put((filename, size, mirror, "100%", "Downloaded", "-", "-"))
             else:
                 stop = False
+                self.gui_update_queue.put((filename, size, mirror, f"{progress}%", "Canceled", "-", "-"))
             self.update_mirror_counter_with_lock(mirror, -1)
             self.gui_update_queue.put((f"{th_name}: thread waiting for work...", "debug"))
             while True:
@@ -437,16 +471,101 @@ class EbookDownloader:
         self.logging_text.delete("1.0", tk.END)
 
     def pause_download(self):
-        logger.debug("Pause Download")
+        if self.download_tree.get_children() == ():
+            logger.info("Download queue is empty!")
+        elif self.selected_items_from_download_tree == set():
+            logger.info("No selected rows!")
+        else:
+            logger.debug("Pause Download")
+            for item in self.selected_items_from_download_tree:
+                values = self.download_tree.item(item, 'values')
+                filename = values[0]
+                status = values[4]
+                if status == 'Downloading':
+                    logger.debug(f"Pausing {filename}")
+                    if self.filenames_by_threads.get(filename, False):
+                        thread = self.filenames_by_threads[filename]
+                        with self.lock_pause_thread:
+                            self.shared_pause_thread.add(thread.name)
+                    else:
+                        logger.warning(f"{filename} couldn't be paused!")
+                else:
+                    logger.debug(f"{filename}: not downloading")
+                    logger.debug(f"{filename}: its status='{status}'")
+            self.selected_items_from_download_tree.clear()
+            # Remove highlighting
+            self.download_tree.selection_remove(self.download_tree.selection())
 
     def resume_download(self):
-        logger.debug("Resume Download")
+        if self.download_tree.get_children() == ():
+            logger.info("Download queue is empty!")
+        elif self.selected_items_from_download_tree == set():
+            logger.info("No selected rows!")
+        else:
+            logger.debug("Resume Download")
+            for item in self.selected_items_from_download_tree:
+                values = self.download_tree.item(item, 'values')
+                filename = values[0]
+                status = values[4]
+                if status == 'Paused':
+                    logger.debug(f"Resuming {filename}")
+                    if self.filenames_by_threads.get(filename, False):
+                        thread = self.filenames_by_threads[filename]
+                        with self.lock_resume_thread:
+                            self.shared_resume_thread.add(thread.name)
+                    else:
+                        logger.warning(f"{filename} couldn't be resumed!")
+                else:
+                    logger.debug(f"{filename}: not paused")
+                    logger.debug(f"{filename}: its status='{status}'")
+            self.selected_items_from_download_tree.clear()
+            # Remove highlighting
+            self.download_tree.selection_remove(self.download_tree.selection())
 
     def cancel_download(self):
-        logger.debug("Cancel Download")
+        if self.download_tree.get_children() == ():
+            logger.info("Download queue is empty!")
+        elif self.selected_items_from_download_tree == set():
+            logger.info("No selected rows!")
+        else:
+            logger.debug("Cancel items from the Download queue")
+            for item in self.selected_items_from_download_tree:
+                values = self.download_tree.item(item, 'values')
+                filename = values[0]
+                status = values[4]
+                if status in ['Downloading', 'Paused']:
+                    logger.debug(f"Canceling {filename}")
+                    if self.filenames_by_threads.get(filename, False):
+                        thread = self.filenames_by_threads[filename]
+                        with self.lock_stop_thread:
+                            self.shared_stop_thread.add(thread.name)
+                        del self.filenames_by_threads[filename]
+                    else:
+                        logger.warning(f"{filename} couldn't be canceled!")
+                else:
+                    logger.debug(f"{filename}: not downloading")
+                    logger.debug(f"{filename}: its status='{status}'")
+            self.selected_items_from_download_tree.clear()
+            # Remove highlighting
+            self.download_tree.selection_remove(self.download_tree.selection())
 
     def clear_downloads(self):
-        logger.debug("Clear downloads")
+        if self.download_tree.get_children() == ():
+            logger.debug("Download queue is already empty!")
+        else:
+            logger.debug("Clear downloads")
+            for child in self.download_tree.get_children():
+                values = self.download_tree.item(child, 'values')
+                filename = values[0]
+                status = values[4]
+                if status != 'Downloading':
+                    logger.debug(f"Removing {filename}")
+                    if self.filenames_by_threads.get(filename, False):
+                        del self.filenames_by_threads[filename]
+                    self.download_tree.delete(child)
+                else:
+                    logger.debug(f"{filename}: it can't be removed because its download has not completed")
+                    logger.debug(f"{filename}: its status='{status}'")
 
     def remove_download(self):
         if self.download_tree.get_children() == ():
@@ -456,21 +575,20 @@ class EbookDownloader:
         else:
             logger.debug("Remove items from the Download queue")
             for item in self.selected_items_from_download_tree:
-                values = self.download_tree.item(item, 'values')
+                values = self.download_tree.item(item, "values")
                 filename = values[0]
                 status = values[4]
-                if status in ["Downloaded", "Waiting"]:
+                if status not in ["Downloading", "Paused"]:
                     logger.debug(f"Removing {filename}")
                     if self.filenames_by_threads.get(filename, False):
-                        thread = self.filenames_by_threads[filename]
-                        with self.lock_stop_thread:
-                            self.shared_stop_thread.add(thread.ident)
                         del self.filenames_by_threads[filename]
                     self.download_tree.delete(item)
                 else:
                     logger.debug(f"{filename}: it can't be removed because its download has not completed")
                     logger.debug(f"{filename}: its status='{status}'")
             self.selected_items_from_download_tree.clear()
+            # Remove highlighting
+            self.download_tree.selection_remove(self.download_tree.selection())
 
     def show_in_finder(self):
         logger.debug("Show in Finder")
