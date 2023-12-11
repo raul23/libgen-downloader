@@ -20,5 +20,3 @@ Download books from Library Genesis (libgen)
   any unauthorized use may constitute a violation of such laws.
   
   This disclaimer may be subject to updates, and users are encouraged to review it periodically for any changes.
-  
-  End of Disclaimer.
