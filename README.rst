@@ -102,8 +102,14 @@ Canceling downloads
 Logging
 -------
 
-Changelogs
-==========
+Changelog
+=========
+Version 0.0.0a0
+---------------
+**December 19, 2023**
+
+- Initial release
+- Tested the application with different Python versions ...
 
 Credits
 =======
