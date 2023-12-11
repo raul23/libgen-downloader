@@ -27,3 +27,23 @@ Disclaimer
   any unauthorized use may constitute a violation of such laws.
   
   This disclaimer may be subject to updates, and users are encouraged to review it periodically for any changes.
+
+Description
+===========
+
+Dependencies
+============
+
+Installation instructions
+=========================
+Install
+=======
+
+Uninstall
+=========
+
+Application usage
+=================
+
+Examples
+========
