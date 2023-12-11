@@ -81,6 +81,9 @@ Install
 
 Uninstall
 ---------
+.. To uninstall the package ``bookdl``::
+
+   .. $ pip uninstall bookdl
 
 Application usage
 =================
