@@ -115,7 +115,7 @@ Version 0.0.0a0
 **December 19, 2023**
 
 - Initial release
-- Tested the application with different Python versions ...
+- Tested the application on different Python versions ...
 
 Credits
 =======
