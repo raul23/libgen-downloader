@@ -38,6 +38,7 @@ Dependencies
 * **Python packages:**
   
   * `Beautiful Soup`_
+  * `lxml`_
   * `pyrfc6266`_
   * `Requests`_
 
@@ -129,6 +130,7 @@ This program is licensed under the MIT License. For more details see the `LICENS
 .. _conda: https://docs.conda.io/en/latest/
 .. _libby: https://github.com/carterprince/libby
 .. _libgen-dl: https://github.com/viown/libgen-dl
+.. _lxml: https://lxml.de/index.html
 .. _pyrfc6266: https://github.com/JohnDoee/pyrfc6266
 .. _venv: https://docs.python.org/3/library/venv.html
 .. _Beautiful Soup: https://www.crummy.com/software/BeautifulSoup/
