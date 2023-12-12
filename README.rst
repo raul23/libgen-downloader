@@ -117,11 +117,6 @@ Version 0.0.0a0
 - Initial release
 - Tested the application on different Python versions ...
 
-Credits
-=======
-- `libby`_ by *carterprince*
-- `libgen-dl`_ by *viown*
-
 License
 =======
 This program is licensed under the MIT License. For more details see the `LICENSE`_ file in the repository.
