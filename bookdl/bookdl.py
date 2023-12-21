@@ -1,16 +1,28 @@
 import logging
+import math
 import queue
+import re
 import sqlite3
 import threading
 import tkinter as tk
 import time
 
-from tkinter import messagebox, ttk
+from html import unescape
+from tkinter import ttk
 
+# Third-party modules
+import requests
+
+from bs4 import BeautifulSoup
+
+# TODO: remove
 import ipdb
+
+__version__ = "0.0.0a0"
 
 logger = logging.getLogger("bookdl")
 DEFAULT_LOGGING_LEVEL = 'Info'
+MIRROR_SOURCES = ["GET", "Cloudflare", "IPFS.io", "Crust", "Pinata"]
 
 
 class TKTextHandler(logging.Handler):
@@ -21,6 +33,17 @@ class TKTextHandler(logging.Handler):
     def emit(self, record):
         msg = self.format(record)
         self.tktext.insert("end", msg+'\n')
+
+
+# Ref.: https://github.com/carterprince/libby/blob/main/libby
+def get_first_author(authors_str):
+    authors_str = authors_str.replace(', ', '; ').replace(';', '; ')
+    authors_str = re.sub(r'\s+', ' ', authors_str)
+    authors = authors_str.split('; ')
+    if len(authors[0].split(" ")) == 1 and len(authors) > 1:
+        authors[0] += ", " + authors[1]
+
+    return authors[0]
 
 
 class EbookDownloader:
@@ -74,40 +97,12 @@ class EbookDownloader:
                 Title TEXT,
                 Publisher TEXT,
                 YEAR TEXT,
-                Pages TEXT,
                 Language TEXT,
+                Pages TEXT,
                 Size TEXT,
                 Extension TEXT
             )
         ''')
-        if False:
-            self.cursor.execute('''
-                INSERT INTO ebooks (
-                    Authors,
-                    Title,
-                    Publisher,
-                    YEAR,
-                    Pages,
-                    Language,
-                    Size,
-                    Extension
-                ) VALUES 
-                ('Author1', 'Book1', 'Publisher1', '2001', '101', 'English', '1 Mb', 'pdf'),
-                ('Author2', 'Book2', 'Publisher2', '2002', '102', 'English', '2 Mb', 'zip'),
-                ('Author3', 'Book3', 'Publisher3', '2003', '103', 'English', '3 Mb', 'epub'),
-                ('Author4', 'Book4', 'Publisher1', '2001', '101', 'English', '1 Mb', 'pdf'),
-                ('Author5', 'Book5', 'Publisher2', '2002', '102', 'English', '2 Mb', 'zip'),
-                ('Author6', 'Book6', 'Publisher3', '2003', '103', 'English', '3 Mb', 'epub'),
-                ('Author7', 'Book7', 'Publisher1', '2001', '101', 'English', '1 Mb', 'pdf'),
-                ('Author8', 'Book8', 'Publisher2', '2002', '102', 'English', '2 Mb', 'zip'),
-                ('Author9', 'Book9', 'Publisher3', '2003', '103', 'English', '3 Mb', 'epub'),
-                ('Author10', 'Book10', 'Publisher1', '2001', '101', 'English', '1 Mb', 'pdf'),
-                ('Author11', 'Book11', 'Publisher2', '2002', '102', 'English', '2 Mb', 'zip'),
-                ('Author12', 'Book12', 'Publisher3', '2003', '103', 'English', '3 Mb', 'epub'),
-                ('Author13', 'Book13', 'Publisher1', '2001', '101', 'English', '1 Mb', 'pdf'),
-                ('Author14', 'Book14', 'Publisher2', '2002', '102', 'English', '2 Mb', 'zip'),
-                ('Author15', 'Book15', 'Publisher3', '2003', '103', 'English', '3 Mb', 'epub');
-            ''')
         self.conn.commit()
 
         # Start a separate thread for GUI updates
@@ -161,17 +156,37 @@ class EbookDownloader:
         search_button.grid(row=0, column=0, padx=(0, 40), pady=10)
 
         # Search Results Table
-        columns = {'Author(s)': 250, 'Title': 350, 'Publisher': 200, 'Year': 50,
-                   'Pages': 50, 'Language': 100, 'Size': 50, 'Extension': 50}
+        columns = {'Title': 350, 'Author(s)': 250, 'Publisher': 200, 'Year': 50,
+                   'Language': 100, 'Pages': 50, 'Size': 50, 'Extension': 50}
         self.search_tree = self.create_table(columns)
-        self.search_tree.grid(row=1, column=0, columnspan=2, padx=10, pady=10, sticky='nsew')
+        scrollbar = tk.Scrollbar(self.root, orient='horizontal', command=self.search_tree.xview)
+        self.search_tree.configure(xscrollcommand=scrollbar.set, yscrollcommand=None)
+        self.search_tree.grid(row=1, column=0, columnspan=2, padx=10, pady=1, sticky='nsew')
+        scrollbar.grid(row=2, column=0, columnspan=2, padx=10, pady=1, sticky='nsew')
         self.search_tree.bind('<ButtonRelease-1>', self.select_items_from_search_tree)
         self.search_tree.bind('<Button-2>', self.show_popup_menu_for_search_table)
 
+        # Create a label and combobox for page number selection
+        label_page_number = tk.Label(self.root, text="Page number:")
+        label_page_number.grid(row=3, column=1, padx=(0, 220), pady=10, sticky="e")
+
+        # Combobox showing list of pages
+        # page_numbers = list(range(1, 501))
+        page_numbers = []
+        page_var = tk.StringVar()
+        page_combobox = ttk.Combobox(self.root, textvariable=page_var, values=page_numbers, state="readonly")
+        page_combobox.set("Select Page")
+        page_combobox.grid(row=3, column=1, padx=10, pady=10, sticky='e')
+
+        def on_page_select(*args):
+            selected_page = page_var.get()
+
+        page_var.trace_add("write", on_page_select)
+
         # Download Queue Table
-        columns = {'Name': 350, 'Size': 50, 'Mirror': 55, 'Progress': 50, 'Status': 100, 'Speed': 50, 'ETA': 50}
+        columns = {'Filename': 430, 'Size': 50, 'Mirror': 55, 'Progress': 50, 'Status': 100, 'Speed': 50, 'ETA': 50}
         self.download_tree = self.create_table(columns)
-        self.download_tree.grid(row=2, column=0, padx=10, pady=10, sticky='nsew')
+        self.download_tree.grid(row=4, column=0, padx=10, pady=0, sticky='nsew')
         self.download_tree.bind('<ButtonRelease-1>', self.select_items_from_download_tree)
         self.download_tree.bind('<Button-2>', self.show_popup_menu_for_download_table)
 
@@ -179,11 +194,11 @@ class EbookDownloader:
         self.logging_text = tk.Text(self.root, wrap='none', width=40, height=10)
         scrollbar = tk.Scrollbar(self.root, orient='horizontal', command=self.logging_text.xview)
         self.logging_text.configure(xscrollcommand=scrollbar.set, yscrollcommand=None)
-        self.logging_text.grid(row=2, column=1, padx=10, pady=10, sticky='nsew')
-        scrollbar.grid(row=3, column=1, padx=10, pady=10, sticky='ew')
+        self.logging_text.grid(row=4, column=1, padx=10, pady=0, sticky='nsew')
+        scrollbar.grid(row=5, column=1, padx=12, pady=(0, 10), sticky='ew')
 
         # Create a right-click pop-up menu
-        self.context_menu = tk.Menu(root, tearoff=0)
+        self.context_menu = tk.Menu(self.root, tearoff=0)
         self.update_toggle_label()  # Initialize the label
 
         # Explicitly set the label for "Toggle Logging" during initialization
@@ -198,28 +213,15 @@ class EbookDownloader:
                 var.set(1)
 
         self.context_menu.add_separator()
-        self.context_menu.add_command(label="Clear all logs", command=self.clear_all_logs)
+        self.context_menu.add_command(label="Clear All Logs", command=self.clear_all_logs)
 
         # Bind the right-click event to the text widget
         # TODO: on Linux it is <Button-3>, on macOS it is <Button-2>
         self.logging_text.bind("<Button-2>", self.show_popup_menu_for_logging_text)
 
-        # TODO: remove next commented code
-        # Logging Table
-        """
-        columns = {'Log': 350}
-        self.logging_tree = self.create_table(columns, anchor='w')
-        self.logging_tree.grid(row=2, column=1, padx=10, pady=10, sticky="nsew")
-
-        # Horizontal Scrollbar
-        horizontal_scrollbar = ttk.Scrollbar(self.root, orient='horizontal', command=self.logging_tree.xview)
-        self.logging_tree.configure(xscrollcommand=horizontal_scrollbar.set)
-        horizontal_scrollbar.grid(row=3, column=1, padx=10, pady=10, sticky="ew")
-        """
-
         # Clear all Button
-        clear_downloads_button = tk.Button(self.root, text='Clear downloads', command=self.clear_downloads)
-        clear_downloads_button.grid(row=3, column=0, padx=5, pady=0, sticky='nsew')
+        clear_downloads_button = tk.Button(self.root, text='Clear All Downloads', command=self.clear_downloads)
+        clear_downloads_button.grid(row=5, column=0, padx=5, pady=0, sticky='nsew')
 
         # Configure column weights to adjust spacing
         # Configure row and column weights to make tables expand
@@ -228,20 +230,195 @@ class EbookDownloader:
         self.root.columnconfigure(0, weight=1)
         self.root.columnconfigure(1, weight=1)
 
+    # Ref.: https://github.com/carterprince/libby/blob/main/libby
     def search_ebooks(self):
         # Clear existing search results
         for item in self.search_tree.get_children():
             self.search_tree.delete(item)
 
         # Perform search and display results
-        search_term = self.search_entry.get()
-        self.cursor.execute("SELECT * FROM ebooks WHERE Title LIKE ? OR Authors LIKE ?",
-                            ("%" + search_term + "%", "%" + search_term + "%"))
-        results = self.cursor.fetchall()
+        query = self.search_entry.get()
 
-        for row in results:
-            # Don't include the first column which is the row id
-            self.search_tree.insert("", "end", values=row[1:])
+        # domains = [libgen.rocks, libgen.lc, libgen.li, libgen.gs, libgen.vg, libgen.pm]
+        domain = "libgen.pm"
+        # e.g. extensions = ['epub', 'pdf']
+        # all extensions: extensions = ['all']
+        extensions = ['all']
+        # e.g. languages = ['english', 'french', 'spanish']
+        # all languages: languages = ['all']
+        languages = ['all']
+        # e.g. options_mirrors = [2, 1]
+        # 1: libgen, 2: libgen.is, 3: annas-archive.org, 4: sci-hub.ru, 5: bookfi.net
+        options_mirrors = []
+        #  results_per_page = 25 OR 50 OR 100
+        results_per_page = 25
+
+        # Search in fields (Columns): Title, Author(s), Series, Year, ISBN
+        # Search in Objects: Files
+        # Search in Topics: Libgen and Fiction
+        # Order: Year
+        # Order mode: DESC
+        # Results: 25
+        # Goggle mode: ON
+        # Search in files: All
+        #
+        # NOTE: Advanced search mode (Google mode), allows you to set more precise search terms:
+        # quotes "", mask *, excluding words - (minus)
+        url = f"https://{domain}/index.php?req={requests.utils.quote(query)}" \
+              "&columns%5B%5D=t&columns%5B%5D=a&columns%5B%5D=s&columns%5B%5D=y&" \
+              "columns%5B%5D=i&objects%5B%5D=f&topics%5B%5D=l&topics%5B%5D=f&" \
+              f"curtab=f&order=year&ordermode=desc&res={results_per_page}&gmode=on&filesuns=all"
+        print(url)
+
+        headers = {
+            "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) "
+                          "QtWebEngine/5.15.5 Chrome/87.0.4280.144 Safari/537.36"
+        }
+
+        response = requests.get(url, headers=headers)
+        soup = BeautifulSoup(response.text, "html.parser")
+
+        table = soup.find(id="tablelibgen")
+        if not table:
+            print(f"No results found for '{query}'")
+            return
+
+        # Find number of pages
+        # TODO: add try except
+        nb_files_found = int(soup.find("a", {'class': 'nav-link active'}).find('span').text)
+        max_nb_files = int(soup.find("a", {'class': 'nav-link active'}).find('i').text.split()[-1])
+        if nb_files_found > max_nb_files:
+            nb_pages = int(math.ceil(max_nb_files/results_per_page))
+        else:
+            nb_pages = int(math.ceil(nb_files_found/results_per_page))
+
+        rows = table.select("tr")
+        books = []
+        for row in rows[1:]:
+            cells = row.select("td")
+            if len(cells) < 9:
+                continue
+
+            language = cells[4].get_text(strip=True)
+            if 'all' not in languages and language.lower() not in languages:
+                continue
+
+            extension = cells[7].get_text(strip=True)
+            if 'all' not in extensions and extension not in extensions:
+                continue
+
+            pages = cells[5].get_text(strip=True)
+
+            title_tags = cells[0].find_all('a', {'data-toggle': 'tooltip'})
+
+            title = None
+            for title_tag in title_tags:
+                text = title_tag.get_text(strip=True)
+                if text:
+                    title = text
+                    break
+
+            if not title:
+                for title_tag in title_tags:
+                    title_attr = title_tag.get('title')
+                    if title_attr:
+                        match = re.search(r'<br>(<.*?>)?(.*?)$', title_attr)
+                        if match:
+                            title = match.group(2).strip()
+                            break
+
+            # TODO: add as option
+            full_titles = True
+            if not full_titles:
+                if ": " in title:
+                    title = title.split(": ")[0]
+                elif " - " in title:
+                    title = title.split(" - ")[0]
+
+            author = cells[1].get_text(strip=True)
+            publisher = cells[2].get_text(strip=True)
+            # TODO: add as option
+            all_authors = True
+            if not all_authors:
+                author = get_first_author(author)
+                publisher = get_first_author(publisher)
+
+            year = cells[3].get_text(strip=True)
+            size = cells[6].get_text(strip=True)
+            mirrors = {}
+            for i, tag in enumerate(cells[8].find_all('a')):
+                if tag["href"]:
+                    if tag["href"].startswith('/ads'):
+                        k = 1
+                    elif "library." in tag["href"]:
+                        k = 2
+                    elif "annas-archive" in tag["href"]:
+                        k = 3
+                    elif "sci-hub" in tag["href"]:
+                        k = 4
+                    elif "bookfi" in tag["href"]:
+                        # bookfi.net doesn't work anymore
+                        k = 5
+                    else:
+                        # TODO: log this case as an unsupported mirror
+                        continue
+                    mirrors[k] = tag["href"]
+            if not mirrors:
+                print("HTML:\n", cells[8].prettify(), "\n---\n")
+                print(f"Could not find the mirror element. Please check the selector or the mirror index.")
+                continue
+
+            books.append({
+                "title": unescape(title),
+                "author": unescape(author),
+                "publisher": unescape(publisher),
+                "year": unescape(year),
+                "language": unescape(language),
+                "pages": unescape(pages),
+                "size": unescape(size),
+                "extension": unescape(extension),
+                "mirrors": mirrors,
+            })
+
+        if not books:
+            print(f"No results found for '{query}'")
+            return
+
+        print(f"Number of files found: {nb_files_found}")
+        print(f"Showing the first {max_nb_files}")
+        print(f"Number of pages: {nb_pages}")
+        print(f"Number of books shown: {len(books)}")
+        """
+        for idx, book in enumerate(reversed(books)):
+            num = str(len(books) - idx)
+            title = book['title']
+            author = book['author']
+            publisher = book['publisher']
+            year = book['year']
+            language = book['language']
+            pages = book['pages']
+            size = book['size']
+            n_mirrors = len(book['mirrors'])
+            extension = book['extension']
+
+            # Only include the comma when the publisher, year, ... is available
+            publisher_string = f"{publisher.strip()}, " if publisher.strip() != "" else ""
+            year_string = f"{year.strip()}, " if year.strip() != "" else ""
+            language_string = f"{language.strip()}, " if language.strip() != "" else ""
+            pages_string = f"{pages.strip()} pages, " if pages.strip() != "" else ""
+            n_mirrors = f"{n_mirrors} mirrors, " if n_mirrors != 0 else ""
+            size_string = f"{size.strip()}" if size.strip() != "" else ""
+
+            print(f"{num}) {title} - {author} ({publisher_string}{year_string}"
+                  f"{language_string}{pages_string}{n_mirrors}{size_string}) [{extension}]")
+        """
+
+        for book in books:
+            self.search_tree.insert("", "end", values=list(book.values())[:8])
+
+        # TODO: don't call the combo box like that
+        self.root.children['!combobox']['values'] = list(range(1, nb_pages+1))
+        self.root.children['!combobox'].set(1)
 
     # TODO: `event` not used
     def select_items_from_search_tree(self, event):
@@ -253,11 +430,11 @@ class EbookDownloader:
         self.selected_items_from_download_tree.clear()
         self.selected_items_from_download_tree = set(self.download_tree.selection())
 
-    def create_table(self, columns, anchor='center'):
+    def create_table(self, columns, anchor='w'):
         tree = ttk.Treeview(self.root, columns=list(columns.keys()), show='headings')
         for col_name, col_width in columns.items():
             tree.heading(col_name, text=col_name)
-            tree.column(col_name, width=col_width, anchor=anchor)
+            tree.column(col_name, width=col_width, anchor=anchor, stretch=0)
         return tree
 
     def download_selected(self, mirror):
@@ -265,7 +442,7 @@ class EbookDownloader:
         for item in self.selected_items_from_search_tree:
             i = 1
             # TODO: only retrieve info that is needed
-            authors, title, publisher, year, pages, language, size, ext = self.search_tree.item(item, "values")
+            title, authors, publisher, year, language, pages, size, ext = self.search_tree.item(item, "values")
             # TODO: use filename instead of title
             filename = title
             while filename in self.filenames:
@@ -409,8 +586,8 @@ class EbookDownloader:
 
     def show_popup_menu_for_search_table(self, event):
         menu = tk.Menu(self.root, tearoff=0)
-        menu.add_command(label='Download with Mirror 1', command=lambda: self.download_selected("mirror1"))
-        menu.add_command(label='Download with Mirror 2', command=lambda: self.download_selected("mirror2"))
+        menu.add_command(label='Download with Mirror 1 (libgen)', command=lambda: self.download_selected("mirror1"))
+        menu.add_command(label='Download with Mirror 2 (libgen.is)', command=lambda: self.download_selected("mirror2"))
         menu.post(event.x_root, event.y_root)
 
     def show_popup_menu_for_download_table(self, event):
