@@ -209,13 +209,19 @@ class EbookDownloader:
         search_button.grid(row=0, column=0, padx=(0, 40), pady=10)
 
         # Search Results Table
-        columns = {'Title': 350, 'Author(s)': 250, 'Publisher': 200, 'Year': 50,
-                   'Language': 100, 'Pages': 50, 'Size': 50, 'Extension': 50}
+        columns = {'Title': 360, 'Author(s)': 250, 'Publisher': 200, 'Year': 50,
+                   'Language': 120, 'Pages': 50, 'Size': 50, 'Extension': 60}
         self.search_tree = self.create_table(columns)
-        scrollbar = tk.Scrollbar(self.root, orient='horizontal', command=self.search_tree.xview)
-        self.search_tree.configure(xscrollcommand=scrollbar.set, yscrollcommand=None)
-        self.search_tree.grid(row=1, column=0, columnspan=2, padx=10, pady=1, sticky='nsew')
-        scrollbar.grid(row=2, column=0, columnspan=2, padx=10, pady=1, sticky='nsew')
+        self.search_tree.grid(row=1, column=0, columnspan=2, padx=1, pady=1, sticky='nsew')
+        # Horizontal bar
+        horizscrollbar = tk.Scrollbar(self.root, orient='horizontal', command=self.search_tree.xview)
+        self.search_tree.configure(xscrollcommand=horizscrollbar.set, yscrollcommand=None)
+        horizscrollbar.grid(row=2, column=0, columnspan=2, padx=1, pady=1, sticky='ew')
+        # Vertical bar
+        verticscrollbar = tk.Scrollbar(self.root, orient='vertical', command=self.search_tree.yview)
+        verticscrollbar.grid(row=1, column=2, padx=(1, 5), pady=1, sticky='ns')
+        self.search_tree.configure(xscrollcommand=horizscrollbar.set, yscrollcommand=verticscrollbar.set)
+        # Buttons
         self.search_tree.bind('<ButtonRelease-1>', self.select_items_from_search_tree)
         self.search_tree.bind('<Button-2>', self.show_popup_menu_for_search_table)
 
@@ -237,7 +243,7 @@ class EbookDownloader:
         page_var.trace_add("write", on_page_select)
 
         # Download Queue Table
-        columns = {'Filename': 430, 'Size': 50, 'Mirror': 55, 'Progress': 50, 'Status': 100, 'Speed': 50, 'ETA': 50}
+        columns = {'Filename': 450, 'Size': 50, 'Mirror': 55, 'Progress': 50, 'Status': 100, 'Speed': 50, 'ETA': 50}
         self.download_tree = self.create_table(columns)
         self.download_tree.grid(row=4, column=0, padx=10, pady=0, sticky='nsew')
         self.download_tree.bind('<ButtonRelease-1>', self.select_items_from_download_tree)
