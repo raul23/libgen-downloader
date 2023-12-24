@@ -257,6 +257,9 @@ class EbookDownloader:
         # Clear existing search results
         for item in self.search_tree.get_children():
             self.search_tree.delete(item)
+        # Clear combobox
+        self.root.children['!combobox']['values'] = []
+        self.root.children['!combobox'].set("Select Page")
 
         # Perform search and display results
         query = self.search_entry.get()
@@ -338,6 +341,8 @@ class EbookDownloader:
         table = soup.find(id="tablelibgen")
         if not table:
             logger.info(f"No results found for '{query}'")
+            # TODO: code factorization
+            logger.info("*" * 30)
             return
 
         # Find number of pages
@@ -429,6 +434,7 @@ class EbookDownloader:
                 if self.get_logging_level() == 'Debug':
                     print("HTML:\n", cells[8].prettify(), "\n---\n")
                 logger.warning(f"Could not find the mirror element. Please check the selector or the mirror index.")
+                logger.info("*" * 30)
                 continue
 
             books.append({
@@ -445,6 +451,7 @@ class EbookDownloader:
 
         if not books:
             logger.info(f"No results found for '{query}'")
+            logger.info("*" * 30)
             return
 
         logger.info(f"Number of files found: {nb_files_found}")
