@@ -27,57 +27,6 @@ MIRROR_SOURCES = ["GET", "Cloudflare", "IPFS.io", "Crust", "Pinata"]
 RESPONSE = None
 
 
-# Ref.: https://stackoverflow.com/a/61689213
-class Main_Frame(object):
-    def __init__(self, func, top, msg, window_title, bounce_speed, pb_length):
-        print('top of Main_Frame')
-        self.func = func
-        self.func_return_l = []
-        # save root reference
-        self.top = top
-        # set title bar
-        self.top.title(window_title)
-
-        self.bounce_speed = bounce_speed
-        self.pb_length = pb_length
-
-        self.msg = msg
-        self.msg_lbl = tk.Label(top, text=msg)
-        self.msg_lbl.pack(padx=10, pady=5)
-
-        # the progress bar will be referenced in the "bar handling" and "work" threads
-        self.load_bar = ttk.Progressbar(top)
-        self.load_bar.pack(padx=10, pady=(0, 10))
-
-        self.start_bar_thread = None
-        self.work_thread = None
-
-        self.bar_init()
-
-    def bar_init(self):
-        # first layer of isolation, note var being passed along to the self.start_bar function
-        # target is the function being started on a new thread, so the "bar handler" thread
-        self.start_bar_thread = threading.Thread(target=self.start_bar, args=())
-        # start the bar handling thread
-        self.start_bar_thread.start()
-
-    def start_bar(self):
-        # the load_bar needs to be configured for indeterminate amount of bouncing
-        self.load_bar.config(mode='indeterminate', maximum=100, value=0, length=self.pb_length)
-        self.load_bar.start(self.bounce_speed)
-
-        self.work_thread = threading.Thread(target=self.work_task, args=())
-        self.work_thread.start()
-
-        # close the work thread
-        self.work_thread.join()
-
-        self.top.destroy()
-
-    def work_task(self):
-        self.func_return_l.append(self.func())
-
-
 class TKTextHandler(logging.Handler):
     def __init__(self, tktext):
         super().__init__()
@@ -365,6 +314,7 @@ class EbookDownloader:
         loading_label.pack(padx=10, pady=5)
 
         # Calculate the center position for the popup window
+        # TODO: not center
         screen_width = self.root.winfo_screenwidth()
         screen_height = self.root.winfo_screenheight()
         popup_width = 350  # Set the width of your popup window
@@ -476,8 +426,9 @@ class EbookDownloader:
                         continue
                     mirrors[k] = tag["href"]
             if not mirrors:
-                print("HTML:\n", cells[8].prettify(), "\n---\n")
-                print(f"Could not find the mirror element. Please check the selector or the mirror index.")
+                if self.get_logging_level() == 'Debug':
+                    print("HTML:\n", cells[8].prettify(), "\n---\n")
+                logger.warning(f"Could not find the mirror element. Please check the selector or the mirror index.")
                 continue
 
             books.append({
