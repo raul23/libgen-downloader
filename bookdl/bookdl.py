@@ -24,6 +24,59 @@ logger = logging.getLogger("bookdl")
 DEFAULT_LOGGING_LEVEL = 'Info'
 MIRROR_SOURCES = ["GET", "Cloudflare", "IPFS.io", "Crust", "Pinata"]
 
+RESPONSE = None
+
+
+# Ref.: https://stackoverflow.com/a/61689213
+class Main_Frame(object):
+    def __init__(self, func, top, msg, window_title, bounce_speed, pb_length):
+        print('top of Main_Frame')
+        self.func = func
+        self.func_return_l = []
+        # save root reference
+        self.top = top
+        # set title bar
+        self.top.title(window_title)
+
+        self.bounce_speed = bounce_speed
+        self.pb_length = pb_length
+
+        self.msg = msg
+        self.msg_lbl = tk.Label(top, text=msg)
+        self.msg_lbl.pack(padx=10, pady=5)
+
+        # the progress bar will be referenced in the "bar handling" and "work" threads
+        self.load_bar = ttk.Progressbar(top)
+        self.load_bar.pack(padx=10, pady=(0, 10))
+
+        self.start_bar_thread = None
+        self.work_thread = None
+
+        self.bar_init()
+
+    def bar_init(self):
+        # first layer of isolation, note var being passed along to the self.start_bar function
+        # target is the function being started on a new thread, so the "bar handler" thread
+        self.start_bar_thread = threading.Thread(target=self.start_bar, args=())
+        # start the bar handling thread
+        self.start_bar_thread.start()
+
+    def start_bar(self):
+        # the load_bar needs to be configured for indeterminate amount of bouncing
+        self.load_bar.config(mode='indeterminate', maximum=100, value=0, length=self.pb_length)
+        self.load_bar.start(self.bounce_speed)
+
+        self.work_thread = threading.Thread(target=self.work_task, args=())
+        self.work_thread.start()
+
+        # close the work thread
+        self.work_thread.join()
+
+        self.top.destroy()
+
+    def work_task(self):
+        self.func_return_l.append(self.func())
+
 
 class TKTextHandler(logging.Handler):
     def __init__(self, tktext):
@@ -275,8 +328,41 @@ class EbookDownloader:
                           "QtWebEngine/5.15.5 Chrome/87.0.4280.144 Safari/537.36"
         }
 
-        response = requests.get(url, headers=headers)
-        soup = BeautifulSoup(response.text, "html.parser")
+        def non_gui_stuff():
+            # We are going to do some work
+            global RESPONSE
+            RESPONSE = requests.get(url, headers=headers)
+
+        t = threading.Thread(target=non_gui_stuff, daemon=True)
+        t.start()
+
+        # Create the loading screen
+        loading_screen = tk.Toplevel(self.root)
+        loading_screen.title("Wait")
+        loading_label = tk.Label(loading_screen, text=f"Retrieving results from {domain}/index.php...")
+        loading_label.pack(padx=10, pady=5)
+
+        # Calculate the center position for the popup window
+        screen_width = self.root.winfo_screenwidth()
+        screen_height = self.root.winfo_screenheight()
+        popup_width = 350  # Set the width of your popup window
+        popup_height = 50  # Set the height of your popup window
+
+        x = (screen_width - popup_width) // 3
+        y = (screen_height - popup_height) // 3
+
+        # Set the geometry of the popup window to the center position
+        loading_screen.geometry(f"{popup_width}x{popup_height}+{x}+{y}")
+
+        # While the thread is alive
+        while t.is_alive():
+            # Update the root so it will keep responding
+            self.root.update()
+
+        loading_screen.destroy()
+
+        # response = requests.get(url, headers=headers)
+        soup = BeautifulSoup(RESPONSE.text, "html.parser")
 
         table = soup.find(id="tablelibgen")
         if not table:
@@ -286,7 +372,12 @@ class EbookDownloader:
         # Find number of pages
         # TODO: add try except
         nb_files_found = int(soup.find("a", {'class': 'nav-link active'}).find('span').text)
-        max_nb_files = int(soup.find("a", {'class': 'nav-link active'}).find('i').text.split()[-1])
+        try:
+            max_nb_files = int(soup.find("a", {'class': 'nav-link active'}).find('i').text.split()[-1])
+        except AttributeError:
+            # TODO: log exception
+            # No attribute 'text', i.e. `<i>Showing the first  1000</i>` not found
+            max_nb_files = 1000
         if nb_files_found > max_nb_files:
             nb_pages = int(math.ceil(max_nb_files/results_per_page))
         else:
@@ -385,7 +476,8 @@ class EbookDownloader:
             return
 
         print(f"Number of files found: {nb_files_found}")
-        print(f"Showing the first {max_nb_files}")
+        if nb_files_found > max_nb_files:
+            print(f"Showing the first {max_nb_files}")
         print(f"Number of pages: {nb_pages}")
         print(f"Number of books shown: {len(books)}")
         """
