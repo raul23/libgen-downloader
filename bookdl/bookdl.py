@@ -170,6 +170,7 @@ class EbookDownloader:
 
         self.setup_logger()
         self.logger_is_setup = True
+        logger.info(f"Logging level set to '{self.get_logging_level()}'")
 
     def setup_logger(self):
         logger.setLevel(DEFAULT_LOGGING_LEVEL.upper())
@@ -290,7 +291,6 @@ class EbookDownloader:
         # Bind the right-click event to the text widget
         # TODO: on Linux it is <Button-3>, on macOS it is <Button-2>
         self.logging_text.bind("<Button-2>", self.show_popup_menu_for_logging_text)
-        self.logging_text.insert("end", f"Logging level set to '{self.get_logging_level()}'" + '\n')
 
         # Clear all Button
         # clear_downloads_button = tk.Button(self.root, text='Clear All Downloads', command=self.clear_downloads)
@@ -341,25 +341,27 @@ class EbookDownloader:
               "&columns%5B%5D=t&columns%5B%5D=a&columns%5B%5D=s&columns%5B%5D=y&" \
               "columns%5B%5D=i&objects%5B%5D=f&topics%5B%5D=l&topics%5B%5D=f&" \
               f"curtab=f&order=year&ordermode=desc&res={results_per_page}&gmode=on&filesuns=all"
-        print(url)
+        logger.debug(url)
 
         headers = {
             "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) "
                           "QtWebEngine/5.15.5 Chrome/87.0.4280.144 Safari/537.36"
         }
 
-        def non_gui_stuff():
+        def retrieve_search_results():
             # We are going to do some work
             global RESPONSE
             RESPONSE = requests.get(url, headers=headers)
 
-        t = threading.Thread(target=non_gui_stuff, daemon=True)
+        logger.info(f"Query: '{query}'")
+        logger.info("Retrieving results ...")
+        t = threading.Thread(target=retrieve_search_results, daemon=True)
         t.start()
 
         # Create the loading screen
         loading_screen = tk.Toplevel(self.root)
         loading_screen.title("Wait")
-        loading_label = tk.Label(loading_screen, text=f"Retrieving results from {domain}/index.php...")
+        loading_label = tk.Label(loading_screen, text=f"Retrieving results from {domain}/index.php ...")
         loading_label.pack(padx=10, pady=5)
 
         # Calculate the center position for the popup window
@@ -381,12 +383,11 @@ class EbookDownloader:
 
         loading_screen.destroy()
 
-        # response = requests.get(url, headers=headers)
         soup = BeautifulSoup(RESPONSE.text, "html.parser")
 
         table = soup.find(id="tablelibgen")
         if not table:
-            print(f"No results found for '{query}'")
+            logger.info(f"No results found for '{query}'")
             return
 
         # Find number of pages
@@ -492,14 +493,16 @@ class EbookDownloader:
             })
 
         if not books:
-            print(f"No results found for '{query}'")
+            logger.info(f"No results found for '{query}'")
             return
 
-        print(f"Number of files found: {nb_files_found}")
+        logger.info(f"Number of files found: {nb_files_found}")
         if nb_files_found > max_nb_files:
-            print(f"Showing the first {max_nb_files}")
-        print(f"Number of pages: {nb_pages}")
-        print(f"Number of books shown: {len(books)}")
+            logger.info(f"Showing the first {max_nb_files}")
+        logger.info(f"Number of pages: {nb_pages}")
+        logger.info(f"Number of books shown: {len(books)}")
+        logger.info("*"*30)
+
         """
         for idx, book in enumerate(reversed(books)):
             num = str(len(books) - idx)
