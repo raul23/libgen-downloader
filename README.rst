@@ -1,7 +1,7 @@
 ====================================
 libgen-downloader (WORK-IN-PROGRESS)
 ====================================
-Multi-threaded GUI-based application for searching and downloading books from Library Genesis (libgen)
+Multi-threaded GUI-based application for searching and downloading books from Library Genesis+ (libgen)
 
 .. raw:: html
 
