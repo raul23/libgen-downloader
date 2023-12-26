@@ -156,38 +156,39 @@ class EbookDownloader:
 
     def create_widgets(self):
         # Search Entry and Button
-        self.search_entry = tk.Entry(self.root, width=50)
-        self.search_entry.grid(row=0, column=0, padx=(20, 0), pady=(0, 0), sticky='w')
-        search_button = tk.Button(self.root, text='Search', command=self.search_ebooks)
-        search_button.grid(row=0, column=0, padx=(200, 50), pady=(0, 0))
+        searchFrame = tk.LabelFrame(self.root, text='Search')
+        searchFrame.grid(row=0, column=0, padx=(15, 0), pady=(0, 0), sticky='nsew')
+        self.search_entry = tk.Entry(searchFrame, width=60)
+        self.search_entry.grid(row=0, column=0, padx=(5, 0), pady=(10, 0), sticky='w')
+        search_button = tk.Button(searchFrame, text='Search', command=self.search_ebooks)
+        search_button.grid(row=0, column=0, padx=(480, 50), pady=(10, 0))
 
         # Search Results Table
         columns = {'Title': 450, 'Author(s)': 255, 'Publisher': 200, 'Year': 50,
                    'Language': 120, 'Pages': 50, 'Size': 50, 'Extension': 50}
-        self.search_tree = self.create_table(columns)
-        self.search_tree.grid(row=1, column=0, columnspan=3, padx=(20, 35), pady=(0, 0), sticky='nsew')
+        self.search_tree = self.create_table(searchFrame, columns, height=12)
+        self.search_tree.grid(row=1, column=0, columnspan=3, padx=(5, 25), pady=(10, 0), sticky='nsew')
         # Horizontal bar
-        horizscrollbar = tk.Scrollbar(self.root, orient='horizontal', command=self.search_tree.xview)
-        horizscrollbar.grid(row=2, column=0, columnspan=3, padx=(20, 35), pady=(4, 1), sticky='ew')
+        horizscrollbar = tk.Scrollbar(searchFrame, orient='horizontal', command=self.search_tree.xview)
+        horizscrollbar.grid(row=2, column=0, columnspan=3, padx=(5, 25), pady=(4, 1), sticky='ew')
         # Vertical bar
-        verticscrollbar = tk.Scrollbar(self.root, orient='vertical', command=self.search_tree.yview)
-        verticscrollbar.grid(row=1, column=2, padx=(6, 15), pady=1, sticky='ns')
+        verticscrollbar = tk.Scrollbar(searchFrame, orient='vertical', command=self.search_tree.yview)
+        verticscrollbar.grid(row=1, column=2, padx=(192, 0), pady=(10, 0), sticky='ns')
         self.search_tree.configure(xscrollcommand=horizscrollbar.set, yscrollcommand=verticscrollbar.set)
         # Buttons
         self.search_tree.bind('<ButtonRelease-1>', self.select_items_from_search_tree)
         self.search_tree.bind('<Button-2>', self.show_popup_menu_for_search_table)
 
         # Create a label and combobox for page number selection
-        label_page_number = tk.Label(self.root, text="Page number:")
-        label_page_number.grid(row=3, column=1, padx=(0, 110), pady=10, sticky="e")
+        label_page_number = tk.Label(searchFrame, text="Page number:")
+        label_page_number.grid(row=3, column=2, padx=(0, 125), pady=10, sticky="e")
 
         # Combobox showing list of pages
-        # page_numbers = list(range(1, 501))
         page_numbers = []
         page_var = tk.StringVar()
-        page_combobox = ttk.Combobox(self.root, textvariable=page_var, values=page_numbers, state="readonly", width=9)
+        page_combobox = ttk.Combobox(searchFrame, textvariable=page_var, values=page_numbers, state="readonly", width=9)
         page_combobox.set("Select Page")
-        page_combobox.grid(row=3, column=1, padx=(0, 0), pady=10, sticky="e")
+        page_combobox.grid(row=3, column=2, padx=(0, 20), pady=10, sticky="e")
 
         def on_page_select(*args):
             selected_page = page_var.get()
@@ -196,27 +197,31 @@ class EbookDownloader:
 
         # Download Queue Table
         columns = {'Filename': 522, 'Size': 55, 'Mirror': 55, 'Progress': 55, 'Status': 100, 'Speed': 55, 'ETA': 50}
-        self.download_tree = self.create_table(columns)
-        self.download_tree.grid(row=4, column=0, padx=(20, 40), pady=1, sticky='nsew')
+        downloadFrame = tk.LabelFrame(self.root, text='Download')
+        downloadFrame.grid(row=1, column=0, padx=(15, 0), pady=(10, 0), sticky='nsw')
+        self.download_tree = self.create_table(downloadFrame, columns, height=12)
+        self.download_tree.grid(row=0, column=0, padx=(5, 25), pady=(10, 0), sticky='nsew')
         self.download_tree.bind('<ButtonRelease-1>', self.select_items_from_download_tree)
         self.download_tree.bind('<Button-2>', self.show_popup_menu_for_download_table)
         # Horizontal bar
-        horizscrollbar = tk.Scrollbar(self.root, orient='horizontal', command=self.download_tree.xview)
-        horizscrollbar.grid(row=5, column=0, padx=(20, 40), pady=(3, 10), sticky='ew')
+        horizscrollbar = tk.Scrollbar(downloadFrame, orient='horizontal', command=self.download_tree.xview)
+        horizscrollbar.grid(row=1, column=0, padx=(5, 25), pady=(4, 5), sticky='ew')
         # Vertical bar
-        verticscrollbar = tk.Scrollbar(self.root, orient='vertical', command=self.download_tree.yview)
-        verticscrollbar.grid(row=4, column=0, padx=(893, 0), pady=1, sticky='ns')
+        verticscrollbar = tk.Scrollbar(downloadFrame, orient='vertical', command=self.download_tree.yview)
+        verticscrollbar.grid(row=0, column=0, padx=(894, 0), pady=(10, 0), sticky='ns')
         self.download_tree.configure(xscrollcommand=horizscrollbar.set, yscrollcommand=verticscrollbar.set)
 
         # Logging text with horizontal scrollbar
-        self.logging_text = tk.Text(self.root, wrap='none', width=40, height=10)
-        self.logging_text.grid(row=4, column=1, padx=(0, 0), pady=(0, 0), sticky='nsew')
+        loggingFrame = tk.LabelFrame(self.root, text='Logging')
+        loggingFrame.grid(row=1, column=0, padx=(960, 0), pady=(10, 0), sticky='nsew')
+        self.logging_text = tk.Text(loggingFrame, wrap='none', width=40, height=18)
+        self.logging_text.grid(row=0, column=0, padx=(0, 0), pady=(5, 0), sticky='nsew')
         # Horizontal bar
-        horizscrollbar = tk.Scrollbar(self.root, orient='horizontal', command=self.logging_text.xview)
-        horizscrollbar.grid(row=5, column=1, padx=(3, 3), pady=(0, 10), sticky='ew')
+        horizscrollbar = tk.Scrollbar(loggingFrame, orient='horizontal', command=self.logging_text.xview)
+        horizscrollbar.grid(row=1, column=0, padx=(3, 3), pady=(0, 0), sticky='ew')
         # Vertical bar
-        verticscrollbar = tk.Scrollbar(self.root, orient='vertical', command=self.logging_text.yview)
-        verticscrollbar.grid(row=4, column=2, padx=(0, 25), pady=(3, 3), sticky='ns')
+        verticscrollbar = tk.Scrollbar(loggingFrame, orient='vertical', command=self.logging_text.yview)
+        verticscrollbar.grid(row=0, column=1, padx=(0, 5), pady=(8, 5), sticky='ns')
         self.logging_text.configure(xscrollcommand=horizscrollbar.set, yscrollcommand=verticscrollbar.set)
 
         # Create a right-click pop-up menu
@@ -247,10 +252,20 @@ class EbookDownloader:
 
         # Configure column weights to adjust spacing
         # Configure row and column weights to make tables expand
-        self.root.rowconfigure(0, weight=1)
-        self.root.rowconfigure(1, weight=1)
-        self.root.columnconfigure(0, weight=1)
-        self.root.columnconfigure(1, weight=1)
+        searchFrame.rowconfigure(0, weight=1)
+        searchFrame.rowconfigure(1, weight=1)
+        searchFrame.columnconfigure(0, weight=1)
+        searchFrame.columnconfigure(1, weight=1)
+
+        downloadFrame.rowconfigure(0, weight=1)
+        downloadFrame.rowconfigure(1, weight=1)
+        downloadFrame.columnconfigure(0, weight=1)
+        downloadFrame.columnconfigure(1, weight=1)
+
+        loggingFrame.rowconfigure(0, weight=1)
+        loggingFrame.rowconfigure(1, weight=1)
+        loggingFrame.columnconfigure(0, weight=1)
+        loggingFrame.columnconfigure(1, weight=1)
 
     # Ref.: https://github.com/carterprince/libby/blob/main/libby
     def search_ebooks(self):
@@ -258,8 +273,9 @@ class EbookDownloader:
         for item in self.search_tree.get_children():
             self.search_tree.delete(item)
         # Clear combobox
-        self.root.children['!combobox']['values'] = []
-        self.root.children['!combobox'].set("Select Page")
+        # TODO: don't hardcode `!combobox`
+        self.root.children['!labelframe'].children['!combobox']['values'] = []
+        self.root.children['!labelframe'].children['!combobox'].set("Select Page")
 
         # Perform search and display results
         query = self.search_entry.get()
@@ -490,8 +506,8 @@ class EbookDownloader:
             self.search_tree.insert("", "end", values=list(book.values())[:8])
 
         # TODO: don't call the combo box like that
-        self.root.children['!combobox']['values'] = list(range(1, nb_pages+1))
-        self.root.children['!combobox'].set(1)
+        self.root.children['!labelframe'].children['!combobox']['values'] = list(range(1, nb_pages+1))
+        self.root.children['!labelframe'].children['!combobox'].set(1)
 
     # TODO: `event` not used
     def select_items_from_search_tree(self, event):
@@ -503,8 +519,8 @@ class EbookDownloader:
         self.selected_items_from_download_tree.clear()
         self.selected_items_from_download_tree = set(self.download_tree.selection())
 
-    def create_table(self, columns, anchor='w'):
-        tree = ttk.Treeview(self.root, columns=list(columns.keys()), show='headings')
+    def create_table(self, parent, columns, anchor='w', height=None):
+        tree = ttk.Treeview(parent, columns=list(columns.keys()), show='headings', height=height)
         for col_name, col_width in columns.items():
             tree.heading(col_name, text=col_name)
             tree.column(col_name, width=col_width, anchor=anchor, stretch=0)
