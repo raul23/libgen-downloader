@@ -54,7 +54,7 @@ class EbookDownloader:
         width = 1280
         height = 800
         self.root.geometry(f"{width}x{height}+0+0")
-        self.root.title("Ebook Downloader")
+        self.root.title("Libgen Downloader")
         self.search_entry = None
         # TODO: table instead of tree
         self.search_tree = None
@@ -178,8 +178,8 @@ class EbookDownloader:
         self.search_tree.bind('<Button-2>', self.show_popup_menu_for_search_table)
 
         # Create a label and combobox for page number selection
-        # label_page_number = tk.Label(self.root, text="Page number:")
-        # label_page_number.grid(row=3, column=1, padx=(0, 220), pady=10, sticky="e")
+        label_page_number = tk.Label(self.root, text="Page number:")
+        label_page_number.grid(row=3, column=1, padx=(0, 110), pady=10, sticky="e")
 
         # Combobox showing list of pages
         # page_numbers = list(range(1, 501))
