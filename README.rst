@@ -3,6 +3,12 @@ libgen-downloader (WORK-IN-PROGRESS)
 ====================================
 Multi-threaded GUI-based application for searching and downloading books from Library Genesis (libgen)
 
+.. raw:: html
+
+  <p align="center">
+    <img src="./images/main.png" width="640" height="363.5">
+  </p>
+
 .. contents:: **Contents**
    :depth: 3
    :local:
