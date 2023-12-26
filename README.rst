@@ -6,7 +6,7 @@ Multi-threaded GUI-based application for searching and downloading books from Li
 .. raw:: html
 
   <p align="center">
-    <img src="./images/main.png" width="736" height="418.025">
+    <img src="./images/main2.png" width="736" height="418.025">
   </p>
 
 .. contents:: **Contents**
