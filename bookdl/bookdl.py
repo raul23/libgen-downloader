@@ -2,7 +2,6 @@ import logging
 import math
 import queue
 import re
-import sqlite3
 import threading
 import tkinter as tk
 import time
@@ -49,15 +48,18 @@ def get_first_author(authors_str):
 
 
 class EbookDownloader:
-    def __init__(self, root):
+    def __init__(self, root, width=1280, height=800):
         self.root = root
-        width = 1280
-        height = 800
-        self.root.geometry(f"{width}x{height}+0+0")
+        self.width = width
+        self.height = height
+        self.root.geometry(f"{self.width}x{self.height}+0+0")
         self.root.title("Libgen Downloader")
+        self.books_per_url = {}
+        self.url = None
         self.search_entry = None
         # TODO: table instead of tree
         self.search_tree = None
+        self.page_var = None
         self.selected_items_from_search_tree = set()
         self.selected_items_from_download_tree = set()
         self.download_tree = None
@@ -81,6 +83,7 @@ class EbookDownloader:
         self.shared_pause_thread = set()
         self.shared_resume_thread = set()
         self.shared_stop_thread = set()
+        self.first_search = False
 
         # Separate locks for different resources
         self.lock_mirror1 = threading.Lock()
@@ -89,26 +92,6 @@ class EbookDownloader:
         self.lock_pause_thread = threading.Lock()
         self.lock_resume_thread = threading.Lock()
         self.lock_stop_thread = threading.Lock()
-
-        # Create and connect to SQLite database
-        self.conn = sqlite3.connect("ebooks.db")
-        self.cursor = self.conn.cursor()
-
-        # Create ebook table if not exists
-        self.cursor.execute('''
-            CREATE TABLE IF NOT EXISTS ebooks (
-                id INTEGER PRIMARY KEY,
-                Authors TEXT,
-                Title TEXT,
-                Publisher TEXT,
-                YEAR TEXT,
-                Language TEXT,
-                Pages TEXT,
-                Size TEXT,
-                Extension TEXT
-            )
-        ''')
-        self.conn.commit()
 
         # Start a separate thread for GUI updates
         threading.Thread(target=self.gui_update_thread, daemon=True).start()
@@ -185,15 +168,17 @@ class EbookDownloader:
 
         # Combobox showing list of pages
         page_numbers = []
-        page_var = tk.StringVar()
-        page_combobox = ttk.Combobox(searchFrame, textvariable=page_var, values=page_numbers, state="readonly", width=9)
+        self.page_var = tk.StringVar()
+        page_combobox = ttk.Combobox(searchFrame, textvariable=self.page_var, values=page_numbers, state="readonly", width=9)
         page_combobox.set("Select Page")
         page_combobox.grid(row=3, column=2, padx=(0, 20), pady=10, sticky="e")
 
+        """
         def on_page_select(*args):
             selected_page = page_var.get()
+        """
 
-        page_var.trace_add("write", on_page_select)
+        self.page_var.trace_add("write", self.on_page_select)
 
         # Download Queue Table
         columns = {'Filename': 522, 'Size': 55, 'Mirror': 55, 'Progress': 55, 'Status': 100, 'Speed': 55, 'ETA': 50}
@@ -267,247 +252,274 @@ class EbookDownloader:
         loggingFrame.columnconfigure(0, weight=1)
         loggingFrame.columnconfigure(1, weight=1)
 
+    def on_page_select(self, *args):
+        selected_page = self.page_var.get()
+        try:
+            # Skip "Select Page"
+            selected_page = int(selected_page)
+
+            if not self.first_search:
+                self.search_ebooks(selected_page, from_combobox=True)
+            else:
+                self.first_search = False
+        except ValueError:
+            pass
+
     # Ref.: https://github.com/carterprince/libby/blob/main/libby
-    def search_ebooks(self):
+    def search_ebooks(self, page=1, from_combobox=False):
         # Clear existing search results
         for item in self.search_tree.get_children():
             self.search_tree.delete(item)
-        # Clear combobox
-        # TODO: don't hardcode `!combobox`
-        self.root.children['!labelframe'].children['!combobox']['values'] = []
-        self.root.children['!labelframe'].children['!combobox'].set("Select Page")
 
-        # Perform search and display results
-        query = self.search_entry.get()
-
-        # domains = [libgen.rocks, libgen.lc, libgen.li, libgen.gs, libgen.vg, libgen.pm]
-        domain = "libgen.pm"
-        # e.g. extensions = ['epub', 'pdf']
-        # all extensions: extensions = ['all']
-        extensions = ['all']
-        # e.g. languages = ['english', 'french', 'spanish']
-        # all languages: languages = ['all']
-        languages = ['all']
-        # e.g. options_mirrors = [2, 1]
-        # 1: libgen, 2: libgen.is, 3: annas-archive.org, 4: sci-hub.ru, 5: bookfi.net
-        options_mirrors = []
-        #  results_per_page = 25 OR 50 OR 100
-        results_per_page = 25
-
-        # Search in fields (Columns): Title, Author(s), Series, Year, ISBN
-        # Search in Objects: Files
-        # Search in Topics: Libgen and Fiction
-        # Order: Year
-        # Order mode: DESC
-        # Results: 25
-        # Goggle mode: ON
-        # Search in files: All
-        #
-        # NOTE: Advanced search mode (Google mode), allows you to set more precise search terms:
-        # quotes "", mask *, excluding words - (minus)
-        url = f"https://{domain}/index.php?req={requests.utils.quote(query)}" \
-              "&columns%5B%5D=t&columns%5B%5D=a&columns%5B%5D=s&columns%5B%5D=y&" \
-              "columns%5B%5D=i&objects%5B%5D=f&topics%5B%5D=l&topics%5B%5D=f&" \
-              f"curtab=f&order=year&ordermode=desc&res={results_per_page}&gmode=on&filesuns=all"
-        logger.debug(url)
-
-        headers = {
-            "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) "
-                          "QtWebEngine/5.15.5 Chrome/87.0.4280.144 Safari/537.36"
-        }
-
-        def retrieve_search_results():
-            # We are going to do some work
-            global RESPONSE
-            RESPONSE = requests.get(url, headers=headers)
-
-        logger.info(f"Query: '{query}'")
-        logger.info("Retrieving results ...")
-        t = threading.Thread(target=retrieve_search_results, daemon=True)
-        t.start()
-
-        # Create the loading screen
-        loading_screen = tk.Toplevel(self.root)
-        loading_screen.title("Wait")
-        loading_label = tk.Label(loading_screen, text=f"Retrieving results from {domain}/index.php ...")
-        loading_label.pack(padx=10, pady=5)
-
-        # Calculate the center position for the popup window
-        # TODO: not center
-        screen_width = self.root.winfo_screenwidth()
-        screen_height = self.root.winfo_screenheight()
-        popup_width = 350  # Set the width of your popup window
-        popup_height = 50  # Set the height of your popup window
-
-        x = (screen_width - popup_width) // 3
-        y = (screen_height - popup_height) // 3
-
-        # Set the geometry of the popup window to the center position
-        loading_screen.geometry(f"{popup_width}x{popup_height}+{x}+{y}")
-
-        # While the thread is alive
-        while t.is_alive():
-            # Update the root so it will keep responding
-            self.root.update()
-
-        loading_screen.destroy()
-
-        soup = BeautifulSoup(RESPONSE.text, "html.parser")
-
-        table = soup.find(id="tablelibgen")
-        if not table:
-            logger.info(f"No results found for '{query}'")
-            # TODO: code factorization
-            logger.info("*" * 30)
-            return
-
-        # Find number of pages
-        # TODO: add try except
-        nb_files_found = int(soup.find("a", {'class': 'nav-link active'}).find('span').text)
-        try:
-            max_nb_files = int(soup.find("a", {'class': 'nav-link active'}).find('i').text.split()[-1])
-        except AttributeError:
-            # TODO: log exception
-            # No attribute 'text', i.e. `<i>Showing the first  1000</i>` not found
-            max_nb_files = 1000
-        if nb_files_found > max_nb_files:
-            nb_pages = int(math.ceil(max_nb_files/results_per_page))
+        if from_combobox and self.url in self.books_per_url and page in self.books_per_url[self.url]:
+            books = self.books_per_url[self.url][page]["books"]
         else:
-            nb_pages = int(math.ceil(nb_files_found/results_per_page))
+            if page == 1:
+                # self.books_per_url = {}
 
-        rows = table.select("tr")
-        books = []
-        for row in rows[1:]:
-            cells = row.select("td")
-            if len(cells) < 9:
-                continue
+                # Clear combobox
+                # TODO: don't hardcode `!combobox`
+                self.root.children['!labelframe'].children['!combobox']['values'] = []
+                self.root.children['!labelframe'].children['!combobox'].set("Select Page")
 
-            language = cells[4].get_text(strip=True)
-            if 'all' not in languages and language.lower() not in languages:
-                continue
+                # Perform search and display results
+                self.query = self.search_entry.get()
+                logger.info(f"Query: '{self.query}'")
 
-            extension = cells[7].get_text(strip=True)
-            if 'all' not in extensions and extension not in extensions:
-                continue
+                # domains = [libgen.rocks, libgen.lc, libgen.li, libgen.gs, libgen.vg, libgen.pm]
+                self.domain = "https://libgen.pm"
+                # e.g. extensions = ['epub', 'pdf']
+                # all extensions: extensions = ['all']
+                self.extensions = ['all']
+                # e.g. languages = ['english', 'french', 'spanish']
+                # all languages: languages = ['all']
+                self.languages = ['all']
+                # e.g. options_mirrors = [2, 1]
+                # 1: libgen, 2: libgen.is, 3: annas-archive.org, 4: sci-hub.ru, 5: bookfi.net
+                options_mirrors = []
+                #  results_per_page = 25 OR 50 OR 100
+                self.results_per_page = 25
 
-            pages = cells[5].get_text(strip=True)
+                # Search in fields (Columns): Title, Author(s), Series, Year, ISBN
+                # Search in Objects: Files
+                # Search in Topics: Libgen and Fiction
+                # Order: Year
+                # Order mode: DESC
+                # Results: 25
+                # Goggle mode: ON
+                # Search in files: All
+                #
+                # NOTE: Advanced search mode (Google mode), allows you to set more precise search terms:
+                # quotes "", mask *, excluding words - (minus)
+                self.url = f"{self.domain}/index.php?req={requests.utils.quote(self.query)}" \
+                           "&columns%5B%5D=t&columns%5B%5D=a&columns%5B%5D=s&columns%5B%5D=y&" \
+                           "columns%5B%5D=i&objects%5B%5D=f&topics%5B%5D=l&topics%5B%5D=f&" \
+                           f"curtab=f&order=year&ordermode=desc&res={self.results_per_page}&" \
+                           f"gmode=on&filesuns=all"
+                self.books_per_url.setdefault(self.url, {})
+                logger.debug(self.url)
+            else:
+                # ipdb.set_trace()
+                pass
 
-            title_tags = cells[0].find_all('a', {'data-toggle': 'tooltip'})
+            assert self.url
+            url = self.url + f"&page={page}"
 
-            title = None
-            for title_tag in title_tags:
-                text = title_tag.get_text(strip=True)
-                if text:
-                    title = text
-                    break
+            if self.url in self.books_per_url and page in self.books_per_url[self.url]:
+                books = self.books_per_url[self.url][page]["books"]
+            else:
+                self.headers = {
+                    "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) "
+                                  "QtWebEngine/5.15.5 Chrome/87.0.4280.144 Safari/537.36"
+                }
 
-            if not title:
-                for title_tag in title_tags:
-                    title_attr = title_tag.get('title')
-                    if title_attr:
-                        match = re.search(r'<br>(<.*?>)?(.*?)$', title_attr)
-                        if match:
-                            title = match.group(2).strip()
+                def retrieve_search_results():
+                    # We are going to do some work
+                    global RESPONSE
+                    RESPONSE = requests.get(url, headers=self.headers)
+
+                logger.info(f"Retrieving results for page {page}...")
+                t = threading.Thread(target=retrieve_search_results, daemon=True)
+                t.start()
+
+                # Create the loading screen
+                loading_screen = tk.Toplevel(self.root)
+                loading_screen.title("Wait")
+                loading_label = tk.Label(loading_screen, text=f"Retrieving results from {self.domain}/index.php ...")
+                loading_label.pack(padx=10, pady=5)
+
+                # Calculate the center position for the popup window
+                # TODO: not centered
+                screen_width = self.root.winfo_screenwidth()
+                screen_height = self.root.winfo_screenheight()
+                popup_width = 350  # Set the width of your popup window
+                popup_height = 50  # Set the height of your popup window
+
+                x = (screen_width - popup_width) // 3
+                y = (screen_height - popup_height) // 3
+
+                # Set the geometry of the popup window to the center position
+                loading_screen.geometry(f"{popup_width}x{popup_height}+{x}+{y}")
+
+                # While the thread is alive
+                while t.is_alive():
+                    # Update the root so it will keep responding
+                    self.root.update()
+
+                loading_screen.destroy()
+
+                soup = BeautifulSoup(RESPONSE.text, "html.parser")
+
+                table = soup.find(id="tablelibgen")
+                if not table:
+                    logger.info(f"No results found for '{self.query}'")
+                    # TODO: code factorization
+                    logger.info("*" * 30)
+                    return
+
+                # Find number of pages
+                # TODO: add try except
+                nb_files_found = int(soup.find("a", {'class': 'nav-link active'}).find('span').text)
+                try:
+                    max_nb_files = int(soup.find("a", {'class': 'nav-link active'}).find('i').text.split()[-1])
+                except AttributeError:
+                    # TODO: log exception
+                    # No attribute 'text', i.e. `<i>Showing the first  1000</i>` not found
+                    max_nb_files = 1000
+                if nb_files_found > max_nb_files:
+                    nb_pages = int(math.ceil(max_nb_files/self.results_per_page))
+                else:
+                    nb_pages = int(math.ceil(nb_files_found/self.results_per_page))
+
+                rows = table.select("tr")
+                books = {}
+                for row in rows[1:]:
+                    cells = row.select("td")
+                    if len(cells) < 9:
+                        continue
+
+                    language = cells[4].get_text(strip=True)
+                    if 'all' not in self.languages and language.lower() not in self.languages:
+                        continue
+
+                    extension = cells[7].get_text(strip=True)
+                    if 'all' not in self.extensions and extension not in self.extensions:
+                        continue
+
+                    pages = cells[5].get_text(strip=True)
+
+                    title_tags = cells[0].find_all('a', {'data-toggle': 'tooltip'})
+
+                    title = None
+                    for title_tag in title_tags:
+                        text = title_tag.get_text(strip=True)
+                        if text:
+                            title = text
                             break
 
-            # TODO: add as option
-            full_titles = True
-            if not full_titles:
-                if ": " in title:
-                    title = title.split(": ")[0]
-                elif " - " in title:
-                    title = title.split(" - ")[0]
+                    if not title:
+                        for title_tag in title_tags:
+                            title_attr = title_tag.get('title')
+                            if title_attr:
+                                match = re.search(r'<br>(<.*?>)?(.*?)$', title_attr)
+                                if match:
+                                    title = match.group(2).strip()
+                                    break
 
-            author = cells[1].get_text(strip=True)
-            publisher = cells[2].get_text(strip=True)
-            # TODO: add as option
-            all_authors = True
-            if not all_authors:
-                author = get_first_author(author)
-                publisher = get_first_author(publisher)
+                    # TODO: add as option
+                    full_titles = True
+                    if not full_titles:
+                        if ": " in title:
+                            title = title.split(": ")[0]
+                        elif " - " in title:
+                            title = title.split(" - ")[0]
 
-            year = cells[3].get_text(strip=True)
-            size = cells[6].get_text(strip=True)
-            mirrors = {}
-            for i, tag in enumerate(cells[8].find_all('a')):
-                if tag["href"]:
-                    if tag["href"].startswith('/ads'):
-                        k = 1
-                    elif "library." in tag["href"]:
-                        k = 2
-                    elif "annas-archive" in tag["href"]:
-                        k = 3
-                    elif "sci-hub" in tag["href"]:
-                        k = 4
-                    elif "bookfi" in tag["href"]:
-                        # bookfi.net doesn't work anymore
-                        k = 5
-                    else:
-                        # TODO: log this case as an unsupported mirror
+                    author = cells[1].get_text(strip=True)
+                    publisher = cells[2].get_text(strip=True)
+                    # TODO: add as option
+                    all_authors = True
+                    if not all_authors:
+                        author = get_first_author(author)
+                        publisher = get_first_author(publisher)
+
+                    year = cells[3].get_text(strip=True)
+                    size = cells[6].get_text(strip=True)
+                    mirrors = {}
+                    md5 = None
+                    for i, tag in enumerate(cells[8].find_all('a')):
+                        if tag["href"]:
+                            url = tag['href']
+                            if tag["href"].startswith('/ads'):
+                                k = 1
+                                # TODO: use `requests` to build url
+                                url = f"{self.domain}{url}"
+                                md5 = tag["href"].strip("/ads")
+                            elif "library." in tag["href"]:
+                                k = 2
+                            elif "annas-archive" in tag["href"]:
+                                k = 3
+                            elif "sci-hub" in tag["href"]:
+                                k = 4
+                            elif "bookfi" in tag["href"]:
+                                # bookfi.net doesn't work anymore
+                                k = 5
+                            else:
+                                # TODO: log this case as an unsupported mirror
+                                continue
+                            mirrors[k] = url
+                    if not mirrors:
+                        if self.get_logging_level() == 'Debug':
+                            print("HTML:\n", cells[8].prettify(), "\n---\n")
+                        logger.warning(f"Could not find the mirror element. Please check the selector or the mirror index.")
+                        logger.warning("*" * 30)
                         continue
-                    mirrors[k] = tag["href"]
-            if not mirrors:
-                if self.get_logging_level() == 'Debug':
-                    print("HTML:\n", cells[8].prettify(), "\n---\n")
-                logger.warning(f"Could not find the mirror element. Please check the selector or the mirror index.")
-                logger.info("*" * 30)
-                continue
 
-            books.append({
-                "title": unescape(title),
-                "author": unescape(author),
-                "publisher": unescape(publisher),
-                "year": unescape(year),
-                "language": unescape(language),
-                "pages": unescape(pages),
-                "size": unescape(size),
-                "extension": unescape(extension),
-                "mirrors": mirrors,
-            })
+                    if md5:
+                        book_data = {
+                                "title": unescape(title),
+                                "author": unescape(author),
+                                "publisher": unescape(publisher),
+                                "year": unescape(year),
+                                "language": unescape(language),
+                                "pages": unescape(pages),
+                                "size": unescape(size),
+                                "extension": unescape(extension),
+                                "mirrors": mirrors,
+                                "md5": md5
+                        }
+                        books.setdefault(md5, book_data)
 
-        if not books:
-            logger.info(f"No results found for '{query}'")
-            logger.info("*" * 30)
-            return
+                if not books:
+                    logger.info(f"No results found for '{self.query}'")
+                    logger.info("*" * 30)
+                    # TODO: return code
+                    return
 
-        logger.info(f"Number of files found: {nb_files_found}")
-        if nb_files_found > max_nb_files:
-            logger.info(f"Showing the first {max_nb_files}")
-        logger.info(f"Number of pages: {nb_pages}")
-        logger.info(f"Number of books shown: {len(books)}")
-        logger.info("*"*30)
+                # TODO: explain solution
+                if not self.first_search and page == 1:
+                    self.first_search = True
+                self.books_per_url[self.url].setdefault(page, {"books": books,
+                                                               "nb_files_found": nb_files_found,
+                                                               "max_nb_files": max_nb_files,
+                                                               "nb_pages": nb_pages})
 
-        """
-        for idx, book in enumerate(reversed(books)):
-            num = str(len(books) - idx)
-            title = book['title']
-            author = book['author']
-            publisher = book['publisher']
-            year = book['year']
-            language = book['language']
-            pages = book['pages']
-            size = book['size']
-            n_mirrors = len(book['mirrors'])
-            extension = book['extension']
+                logger.info(f"Number of files found: {nb_files_found}")
+                if nb_files_found > max_nb_files:
+                    logger.info(f"Showing the first {max_nb_files}")
+                logger.info(f"Number of pages: {nb_pages}")
+                logger.info(f"Number of books shown: {len(books)}")
+                logger.info("*"*30)
 
-            # Only include the comma when the publisher, year, ... is available
-            publisher_string = f"{publisher.strip()}, " if publisher.strip() != "" else ""
-            year_string = f"{year.strip()}, " if year.strip() != "" else ""
-            language_string = f"{language.strip()}, " if language.strip() != "" else ""
-            pages_string = f"{pages.strip()} pages, " if pages.strip() != "" else ""
-            n_mirrors = f"{n_mirrors} mirrors, " if n_mirrors != 0 else ""
-            size_string = f"{size.strip()}" if size.strip() != "" else ""
+            if page == 1:
+                # TODO: don't call the combo box like that
+                nb_pages = self.books_per_url[self.url][page]["nb_pages"]
+                self.root.children['!labelframe'].children['!combobox']['values'] = list(range(1, nb_pages + 1))
 
-            print(f"{num}) {title} - {author} ({publisher_string}{year_string}"
-                  f"{language_string}{pages_string}{n_mirrors}{size_string}) [{extension}]")
-        """
-
-        for book in books:
+        for md5, book in books.items():
             self.search_tree.insert("", "end", values=list(book.values())[:8])
 
         # TODO: don't call the combo box like that
-        self.root.children['!labelframe'].children['!combobox']['values'] = list(range(1, nb_pages+1))
-        self.root.children['!labelframe'].children['!combobox'].set(1)
+        self.root.children['!labelframe'].children['!combobox'].set(page)
 
     # TODO: `event` not used
     def select_items_from_search_tree(self, event):
