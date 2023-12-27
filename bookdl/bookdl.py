@@ -15,7 +15,6 @@ import pyrfc6266
 import requests
 
 from bs4 import BeautifulSoup
-from tqdm import tqdm
 
 # TODO: remove
 import ipdb
@@ -709,20 +708,12 @@ class EbookDownloader:
 
                 # TODO: test if file error (e.g. directory doesn't exist)
                 self.chunk_size = 8192
-                with open(Path.cwd().joinpath(filename), "wb") as f, tqdm(
-                    desc="Downloading",
-                    total=total_size,
-                    unit="B",
-                    unit_scale=True,
-                    unit_divisor=1024,  # Use 1024 to display in KB
-                    disable=True  # Set to True to disable progress bar display
-                ) as pbar:
+                with open(Path.cwd().joinpath(filename), "wb") as f:
                     start_time = time.time()
                     bytes_so_far = [0]
                     for chunk in download_response.iter_content(chunk_size=self.chunk_size):
                         f.write(chunk)
                         bytes_so_far[0] += len(chunk)
-                        # pbar.update(len(chunk))
 
                         # Calculate percentage completion, ETA and download speed
                         # NOTE: use `bytes_so_far[0]` instead of `pbar.n` because `pbar.n` always gives 0
@@ -731,8 +722,9 @@ class EbookDownloader:
                         elapsed_time = time.time() - start_time
                         # Download speed in B/s
                         download_speed = bytes_so_far[0] / elapsed_time if elapsed_time > 0 else 0
-                        # ETA in seconds
-                        eta = (total_size - bytes_so_far[0]) / download_speed if download_speed > 0 else 0
+                        eta_seconds = (total_size - bytes_so_far[0]) / download_speed if download_speed > 0 else 0
+                        eta_formatted = self.format_time(eta_seconds)
+                        download_speed_formatted = self.format_size(download_speed) + '/s'
                         size_downloaded = self.format_size(bytes_so_far[0])
 
                         # TODO: remove print
@@ -740,8 +732,8 @@ class EbookDownloader:
                         # Download speed: convert B/s to KB/s
                         # ETA: convert s to mins
                         self.gui_update_queue.put((filename, size_downloaded, mirror, f"{percentage_completion:.2f}%",
-                                                   "Downloading", f"{download_speed/1024:.2f} KB/s",
-                                                   f"{eta/60:.2f} mins"))
+                                                   "Downloading", f"{download_speed_formatted}",
+                                                   f"{eta_formatted}"))
 
                         with self.lock_stop_thread:
                             if th_name in self.shared_stop_thread:
@@ -815,6 +807,17 @@ class EbookDownloader:
             if size < 1024.0:
                 return f"{size:.2f} {unit}"
             size /= 1024.0
+
+    @staticmethod
+    def format_time(seconds):
+        intervals = [('days', 86400), ('hours', 3600), ('minutes', 60), ('seconds', 1)]
+        result = []
+        for name, count in intervals:
+            value = seconds // count
+            if value:
+                result.append(f"{int(value)} {name}")
+            seconds %= count
+        return ', '.join(result)
 
     # Update mirror counter with the appropriate lock
     def update_mirror_counter_with_lock(self, mirror, value):
