@@ -346,7 +346,7 @@ class EbookDownloader:
                 loading_screen = tk.Toplevel(self.root)
                 loading_screen.title("Wait")
                 loading_label = tk.Label(loading_screen, text=f"Retrieving results from {self.domain}/index.php ...")
-                loading_label.pack(padx=10, pady=5)
+                loading_label.pack(padx=0, pady=5)
 
                 # Calculate the center position for the popup window
                 # TODO: not centered
