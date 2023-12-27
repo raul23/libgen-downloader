@@ -54,7 +54,8 @@ class EbookDownloader:
         self.height = height
         self.root.geometry(f"{self.width}x{self.height}+0+0")
         self.root.title("Libgen Downloader")
-        self.books_per_url = {}
+        self.book_ids_per_urls = {}
+        self.books = {}
         self.url = None
         self.search_entry = None
         # TODO: table instead of tree
@@ -293,12 +294,10 @@ class EbookDownloader:
         for item in self.search_tree.get_children():
             self.search_tree.delete(item)
 
-        if from_combobox and self.url in self.books_per_url and page in self.books_per_url[self.url]:
-            books = self.books_per_url[self.url][page]["books"]
+        if from_combobox and self.url in self.book_ids_per_urls and page in self.book_ids_per_urls[self.url]:
+            book_ids = self.book_ids_per_urls[self.url][page]["book_ids"]
         else:
             if page == 1:
-                # self.books_per_url = {}
-
                 # Clear combobox
                 # TODO: don't hardcode `!combobox`
                 self.root.children['!labelframe'].children['!combobox']['values'] = []
@@ -325,7 +324,7 @@ class EbookDownloader:
                            "columns%5B%5D=i&objects%5B%5D=f&topics%5B%5D=l&topics%5B%5D=f&" \
                            f"curtab=f&order=year&ordermode=desc&res={self.results_per_page}&" \
                            f"gmode=on&filesuns=all"
-                self.books_per_url.setdefault(self.url, {})
+                self.book_ids_per_urls.setdefault(self.url, {})
                 logger.debug(self.url)
             else:
                 # ipdb.set_trace()
@@ -334,14 +333,17 @@ class EbookDownloader:
             assert self.url
             url = self.url + f"&page={page}"
 
-            if self.url in self.books_per_url and page in self.books_per_url[self.url]:
-                books = self.books_per_url[self.url][page]["books"]
+            if self.url in self.book_ids_per_urls and page in self.book_ids_per_urls[self.url]:
+                book_ids = self.book_ids_per_urls[self.url][page]["book_ids"]
             else:
 
                 def retrieve_search_results():
                     # We are going to do some work
                     global RESPONSE
+                    start = time.time()
                     RESPONSE = requests.get(url, headers=self.headers)
+                    duration = time.time() - start
+                    logger.info(f"It took {int(duration)}s")
 
                 logger.info(f"Retrieving results for page {page}...")
                 t = threading.Thread(target=retrieve_search_results, daemon=True)
@@ -395,7 +397,7 @@ class EbookDownloader:
 
                 rows = table.select("tr")
                 # TODO: describe structure of `books`
-                books = {}
+                book_ids = []
                 for row in rows[1:]:
                     cells = row.select("td")
                     if len(cells) < 9:
@@ -494,12 +496,13 @@ class EbookDownloader:
                                 "mirrors": mirrors,
                                 "md5": md5
                         }
-                        books.setdefault(book_id, book_data)
+                        self.books.setdefault(book_id, book_data)
+                        book_ids.append(book_id)
                     else:
                         # TODO: add log warning
-                        pass
+                        continue
 
-                if not books:
+                if not book_ids:
                     logger.info(f"No results found for '{self.query}'")
                     logger.info("*" * 30)
                     # TODO: return code
@@ -508,24 +511,25 @@ class EbookDownloader:
                 # TODO: explain solution
                 if not self.first_search and page == 1:
                     self.first_search = True
-                self.books_per_url[self.url].setdefault(page, {"books": books,
-                                                               "nb_files_found": nb_files_found,
-                                                               "max_nb_files": max_nb_files,
-                                                               "nb_pages": nb_pages})
+                self.book_ids_per_urls[self.url].setdefault(page, {"book_ids": book_ids,
+                                                                   "nb_files_found": nb_files_found,
+                                                                   "max_nb_files": max_nb_files,
+                                                                   "nb_pages": nb_pages})
 
                 logger.info(f"Number of files found: {nb_files_found}")
                 if nb_files_found > max_nb_files:
                     logger.info(f"Showing the first {max_nb_files}")
                 logger.info(f"Number of pages: {nb_pages}")
-                logger.info(f"Number of books shown: {len(books)}")
+                logger.info(f"Number of books shown: {len(book_ids)}")
                 logger.info("*"*30)
 
             if page == 1:
                 # TODO: don't call the combo box like that
-                nb_pages = self.books_per_url[self.url][page]["nb_pages"]
+                nb_pages = self.book_ids_per_urls[self.url][page]["nb_pages"]
                 self.root.children['!labelframe'].children['!combobox']['values'] = list(range(1, nb_pages + 1))
 
-        for md5, book in books.items():
+        for book_id in book_ids:
+            book = self.books[book_id]
             self.search_tree.insert("", "end", values=list(book.values())[:9])
 
         # TODO: don't call the combo box like that
@@ -541,7 +545,8 @@ class EbookDownloader:
         self.selected_items_from_download_tree.clear()
         self.selected_items_from_download_tree = set(self.download_tree.selection())
 
-    def create_table(self, parent, columns, anchor='w', height=None):
+    @staticmethod
+    def create_table(parent, columns, anchor='w', height=None):
         tree = ttk.Treeview(parent, columns=list(columns.keys()), show='headings', height=height)
         for col_name, col_width in columns.items():
             tree.heading(col_name, text=col_name)
@@ -552,9 +557,9 @@ class EbookDownloader:
         logger.debug(f"Downloading {len(self.selected_items_from_search_tree)} file(s) with {mirror}")
         for item in self.selected_items_from_search_tree:
             i = 1
-            # TODO: only retrieve info that is needed
-            title, authors, publisher, year, language, pages, size, ext = self.search_tree.item(item, "values")
-            # TODO: use filename instead of title
+            # TODO: only retrieve info that are needed
+            id, title, authors, publisher, year, language, pages, size, ext = self.search_tree.item(item, "values")
+            ipdb.set_trace()
             filename = title
             while filename in self.filenames:
                 filename = f"{title} ({i})"
@@ -697,8 +702,8 @@ class EbookDownloader:
 
     def show_popup_menu_for_search_table(self, event):
         menu = tk.Menu(self.root, tearoff=0)
-        menu.add_command(label='Download with Mirror 1 (libgen)', command=lambda: self.download_selected("mirror1"))
-        menu.add_command(label='Download with Mirror 2 (libgen.is)', command=lambda: self.download_selected("mirror2"))
+        menu.add_command(label='Download with Mirror 1 (libgen)', command=lambda: self.download_selected(1))
+        menu.add_command(label='Download with Mirror 2 (libgen.is)', command=lambda: self.download_selected(2))
         menu.post(event.x_root, event.y_root)
 
     def show_popup_menu_for_download_table(self, event):
