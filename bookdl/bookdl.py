@@ -94,10 +94,11 @@ class EbookDownloader:
         # e.g. languages = ['english', 'french', 'spanish']
         # all languages: languages = ['all']
         self.languages = ['all']
-        # e.g. options_mirrors = [2, 1]
+        # e.g. mirrors = [1, 2, 3]
         # 1: libgen, 2: libgen.is, 3: annas-archive.org, 4: sci-hub.ru, 5: bookfi.net
-        options_mirrors = []
-        #  results_per_page = 25 OR 50 OR 100
+        # TODO: not used
+        self.mirrors = [1, 2]
+        # results_per_page = 25 OR 50 OR 100
         self.results_per_page = 25
         self.headers = {
             "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) "
@@ -166,8 +167,9 @@ class EbookDownloader:
         search_button.grid(row=0, column=0, padx=(480, 50), pady=(10, 0))
 
         # Search Results Table
-        columns = {'Title': 450, 'Author(s)': 255, 'Publisher': 200, 'Year': 50,
-                   'Language': 120, 'Pages': 50, 'Size': 50, 'Extension': 50}
+        columns = {'ID': 80, 'Title': 370, 'Author(s)': 255, 'Publisher': 200,
+                   'Year': 50, 'Language': 120, 'Pages': 50, 'Size': 50,
+                   'Extension': 50}
         self.search_tree = self.create_table(searchFrame, columns, height=12)
         self.search_tree.grid(row=1, column=0, columnspan=3, padx=(5, 25), pady=(10, 0), sticky='nsew')
         # Horizontal bar
@@ -271,6 +273,7 @@ class EbookDownloader:
         loggingFrame.columnconfigure(0, weight=1)
         loggingFrame.columnconfigure(1, weight=1)
 
+    # TODO: `args` not used
     def on_page_select(self, *args):
         selected_page = self.page_var.get()
         try:
@@ -302,6 +305,7 @@ class EbookDownloader:
                 self.root.children['!labelframe'].children['!combobox'].set("Select Page")
 
                 # Perform search and display results
+                # TODO: lowercase query, e.g. 'paul dirac' == 'Paul Dirac'
                 self.query = self.search_entry.get()
                 logger.info(f"Query: '{self.query}'")
 
@@ -355,10 +359,8 @@ class EbookDownloader:
                 screen_height = self.root.winfo_screenheight()
                 popup_width = 350  # Set the width of your popup window
                 popup_height = 50  # Set the height of your popup window
-
                 x = (screen_width - popup_width) // 3
                 y = (screen_height - popup_height) // 3
-
                 # Set the geometry of the popup window to the center position
                 loading_screen.geometry(f"{popup_width}x{popup_height}+{x}+{y}")
 
@@ -370,7 +372,6 @@ class EbookDownloader:
                 loading_screen.destroy()
 
                 soup = BeautifulSoup(RESPONSE.text, "html.parser")
-
                 table = soup.find(id="tablelibgen")
                 if not table:
                     logger.info(f"No results found for '{self.query}'")
@@ -393,31 +394,34 @@ class EbookDownloader:
                     nb_pages = int(math.ceil(nb_files_found/self.results_per_page))
 
                 rows = table.select("tr")
+                # TODO: describe structure of `books`
                 books = {}
                 for row in rows[1:]:
                     cells = row.select("td")
                     if len(cells) < 9:
+                        # TODO: add log warning
                         continue
 
                     language = cells[4].get_text(strip=True)
                     if 'all' not in self.languages and language.lower() not in self.languages:
+                        # TODO: add log warning
                         continue
 
                     extension = cells[7].get_text(strip=True)
                     if 'all' not in self.extensions and extension not in self.extensions:
+                        # TODO: add log warning
                         continue
 
+                    book_id = cells[0].find('span', {'class': "badge-secondary"}).get_text(strip=True).replace(' ', '')
                     pages = cells[5].get_text(strip=True)
 
                     title_tags = cells[0].find_all('a', {'data-toggle': 'tooltip'})
-
                     title = None
                     for title_tag in title_tags:
                         text = title_tag.get_text(strip=True)
                         if text:
                             title = text
                             break
-
                     if not title:
                         for title_tag in title_tags:
                             title_attr = title_tag.get('title')
@@ -426,7 +430,6 @@ class EbookDownloader:
                                 if match:
                                     title = match.group(2).strip()
                                     break
-
                     # TODO: add as option
                     full_titles = True
                     if not full_titles:
@@ -445,6 +448,7 @@ class EbookDownloader:
 
                     year = cells[3].get_text(strip=True)
                     size = cells[6].get_text(strip=True)
+
                     mirrors = {}
                     md5 = None
                     for i, tag in enumerate(cells[8].find_all('a')):
@@ -476,9 +480,9 @@ class EbookDownloader:
                                        "mirror index.")
                         logger.warning("*" * 30)
                         continue
-
                     if md5:
                         book_data = {
+                                "book_id": book_id,
                                 "title": unescape(title),
                                 "author": unescape(author),
                                 "publisher": unescape(publisher),
@@ -490,7 +494,10 @@ class EbookDownloader:
                                 "mirrors": mirrors,
                                 "md5": md5
                         }
-                        books.setdefault(md5, book_data)
+                        books.setdefault(book_id, book_data)
+                    else:
+                        # TODO: add log warning
+                        pass
 
                 if not books:
                     logger.info(f"No results found for '{self.query}'")
@@ -519,7 +526,7 @@ class EbookDownloader:
                 self.root.children['!labelframe'].children['!combobox']['values'] = list(range(1, nb_pages + 1))
 
         for md5, book in books.items():
-            self.search_tree.insert("", "end", values=list(book.values())[:8])
+            self.search_tree.insert("", "end", values=list(book.values())[:9])
 
         # TODO: don't call the combo box like that
         self.root.children['!labelframe'].children['!combobox'].set(page)
