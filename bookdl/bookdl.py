@@ -7,12 +7,15 @@ import tkinter as tk
 import time
 
 from html import unescape
+from pathlib import Path
 from tkinter import ttk
 
 # Third-party modules
+import pyrfc6266
 import requests
 
 from bs4 import BeautifulSoup
+from tqdm import tqdm
 
 # TODO: remove
 import ipdb
@@ -47,6 +50,24 @@ def get_first_author(authors_str):
     return authors[0]
 
 
+# Return "folder_path/basename" if no file exists at this path. Otherwise,
+# sequentially insert " ($n)" before the extension of `basename` and return the
+# first path for which no file is present.
+# ref.: https://bit.ly/3n1JNuk
+def unique_filename(folder_path, basename):
+    stem = Path(basename).stem
+    ext = Path(basename).suffix
+    new_path = Path(Path(folder_path).joinpath(basename))
+    counter = 0
+    while new_path.is_file():
+        counter += 1
+        logger.debug(f"File '{new_path.name}' already exists in destination "
+                     f"'{folder_path}', trying with counter {counter}!")
+        new_stem = f'{stem} {counter}'
+        new_path = Path(Path(folder_path).joinpath(new_stem + ext))
+    return new_path.as_posix()
+
+
 class EbookDownloader:
     def __init__(self, root, width=1280, height=800):
         self.root = root
@@ -56,6 +77,7 @@ class EbookDownloader:
         self.root.title("Libgen Downloader")
         self.book_ids_per_urls = {}
         self.books = {}
+        self.filenames = {}
         self.url = None
         self.search_entry = None
         # TODO: table instead of tree
@@ -74,7 +96,6 @@ class EbookDownloader:
         ]
         self.toggle_var = tk.IntVar()
         self.toggle_label = tk.StringVar()
-        self.filenames = set()
         self.gui_update_queue = queue.Queue()
         self.nb_threads = 0
         self.filenames_by_threads = {}
@@ -85,6 +106,9 @@ class EbookDownloader:
         self.shared_resume_thread = set()
         self.shared_stop_thread = set()
         self.first_search = False
+        self.max_retries = 1
+        self.delay_between_retries = 0.5
+        self.chunk_size = 8192
 
         self.query = None
         # domains = [libgen.rocks, libgen.lc, libgen.li, libgen.gs, libgen.vg, libgen.pm]
@@ -555,21 +579,78 @@ class EbookDownloader:
 
     def download_selected(self, mirror):
         logger.debug(f"Downloading {len(self.selected_items_from_search_tree)} file(s) with {mirror}")
+        # TODO: one thread per selected item from the search table
         for item in self.selected_items_from_search_tree:
-            i = 1
             # TODO: only retrieve info that are needed
-            id, title, authors, publisher, year, language, pages, size, ext = self.search_tree.item(item, "values")
-            ipdb.set_trace()
-            filename = title
-            while filename in self.filenames:
-                filename = f"{title} ({i})"
-                i += 1
-            self.filenames.add(filename)
-            self.download_tree.insert("", "end", values=(filename, size, mirror, "0%", "Waiting"))
+            book_id, title, authors, publisher, year, language, pages, size, ext = self.search_tree.item(item, "values")
 
-            # TODO: use lock for reading shared_nb_mirror1 and shared_nb_mirror2?
-            if mirror == 'mirror1' and self.shared_nb_mirror1 == 3 or \
-                    mirror == 'mirror2' and self.shared_nb_mirror2 == 3:
+            # Ref.: https://github.com/carterprince/libby/blob/main/libby
+            nb_retries1 = 0
+            nb_retries2 = 0
+            mirror_soup = None
+            download_url = None
+            next_step = False
+            while nb_retries1 <= self.max_retries or nb_retries2 <= self.max_retries:
+                if not next_step:
+                    mirror_url = self.books[book_id]['mirrors'][mirror]
+                    mirror_response = requests.get(mirror_url, headers=self.headers)
+                    if mirror_response.status_code != 200:
+                        nb_retries1 += 1
+                        logger.warning("Couldn't process mirror URL. Will retry again.")
+                        logger.debug(f"Sleeping [retry1={nb_retries1}] ...")
+                        time.sleep(self.delay_between_retries)
+                    else:
+                        mirror_soup = BeautifulSoup(mirror_response.text, "html.parser")
+                        next_step = True
+                else:
+                    try:
+                        assert mirror_soup
+                        download_url = mirror_soup.find("a", string="GET")["href"].replace("\get.php", "/get.php")
+                        break
+                    except TypeError:
+                        # e.g. TypeError: 'NoneType' object is not subscriptable
+                        ipdb.set_trace()
+                        nb_retries2 += 1
+                        logger.warning("Couldn't find download URL. Will retry again.")
+                        logger.debug(f"Sleeping [retry2={nb_retries2}] ...")
+                        time.sleep(self.delay_between_retries)
+
+            if nb_retries1 >= self.max_retries or nb_retries2 >= self.max_retries:
+                logger.warning(f"Skipped mirror URL: {mirror_url}")
+                continue
+
+            assert download_url
+            nb_retries = 0
+            download_response = None
+            while nb_retries <= self.max_retries:
+                download_response = requests.get(download_url, headers=self.headers, stream=True)
+                if download_response.status_code != 200:
+                    nb_retries += 1
+                    logger.warning("Couldn't process download URL. Will retry again.")
+                    logger.debug(f"Sleeping [retry={nb_retries}] ...")
+                    time.sleep(self.delay_between_retries)
+                else:
+                    break
+
+            if nb_retries >= self.max_retries:
+                logger.warning(f"Skipped download URL [{download_response.status_code}]: {download_url}")
+                continue
+            else:
+                # TODO: necessary?
+                assert download_response
+                download_response.close()
+
+            # Generate unique filename from response to download URL
+            filepath = unique_filename(Path.cwd(), pyrfc6266.requests_response_to_filename(download_response))
+            filename = Path(filepath).name
+            logger.debug(f"Filename: {Path(filepath).name}")
+            self.download_tree.insert("", "end", values=(filename, size, mirror, "0%", "Waiting"))
+            self.filenames.setdefault(filename, {'book_id': book_id,
+                                                 'download_url': download_url})
+
+            # TODO: use lock for reading `shared_nb_mirror1` and `shared_nb_mirror2`?
+            if mirror == 1 and self.shared_nb_mirror1 == 3 or \
+                    mirror == 2 and self.shared_nb_mirror2 == 3:
                 add_to_queue = True
             else:
                 add_to_queue = False
@@ -577,7 +658,7 @@ class EbookDownloader:
             # Start download in a separate thread
             if not add_to_queue and self.nb_threads < 6:
                 th_name = f"Thread-{self.nb_threads + 1}"
-                thread = threading.Thread(target=self.download_ebook, args=(filename, size, mirror, th_name))
+                thread = threading.Thread(target=self.download_ebook, args=(filename, size, mirror, th_name, download_url))
                 thread.daemon = True
                 thread.start()
                 self.nb_threads += 1
@@ -591,54 +672,114 @@ class EbookDownloader:
                     self.shared_download_queue.append((filename, size, mirror))
 
     # Worker thread
-    def download_ebook(self, filename, size, mirror, th_name):
+    def download_ebook(self, filename, size, mirror, th_name, download_url):
         thread = threading.current_thread()
         thread.setName(th_name)
-        # th_id = thread.ident
         stop = False
         self.gui_update_queue.put((f"{th_name}: starting first download "
-                                   f"with filename={filename} and {mirror}", "debug"))
+                                   f"with filename={filename} and mirror={mirror}", "debug"))
         while True:
-            # Simulate download progress
             self.filenames_by_threads[filename] = thread
-            for progress in range(1, 101):
-                time.sleep(0.1)
-                eta = 100 - progress
-                self.gui_update_queue.put((filename, size, mirror, f"{progress}%", "Downloading", "1 Mb/s", f"{eta} s"))
-                with self.lock_stop_thread:
-                    if th_name in self.shared_stop_thread:
-                        self.gui_update_queue.put((f"{th_name}: thread will stop what it is doing", "debug"))
-                        stop = True
-                        self.shared_stop_thread.remove(th_name)
-                        break
-                pause = False
-                with self.lock_pause_thread:
-                    if th_name in self.shared_pause_thread:
-                        self.gui_update_queue.put((f"{th_name}: thread will pause what it is doing", "debug"))
-                        self.gui_update_queue.put(
-                            (filename, size, mirror, f"{progress}%", "Paused", "-", "-"))
-                        self.shared_pause_thread.remove(th_name)
-                        pause = True
-                if pause:
-                    while True:
-                        # self.gui_update_queue.put((f"{th_name}: thread will sleep", "debug"))
-                        time.sleep(0.1)
-                        # self.gui_update_queue.put((f"{th_name}: thread will check if it can resume", "debug"))
-                        with self.lock_resume_thread:
-                            if th_name in self.shared_resume_thread:
-                                self.gui_update_queue.put(
-                                    (f"{th_name}: thread will resume what it was doing", "debug"))
-                                self.shared_resume_thread.remove(th_name)
-                                break
-                        # TODO: factorization, code block used above
+
+            # TODO: code factorization
+            nb_retries = 0
+            download_response = None
+            # Create a session
+            session = requests.Session()
+            while nb_retries <= self.max_retries:
+                download_response = session.get(download_url, headers=self.headers, stream=True)
+                if download_response.status_code != 200:
+                    nb_retries += 1
+                    logger.warning("Couldn't process download URL. Will retry again.")
+                    logger.debug(f"Sleeping [retry={nb_retries}] ...")
+                    time.sleep(self.delay_between_retries)
+                else:
+                    break
+
+            if nb_retries >= self.max_retries:
+                logger.warning(f"Skipped download URL [download_response.status_code]: {download_url}")
+                stop = True
+            else:
+                # TODO: necessary?
+                assert download_response
+                total_size = int(download_response.headers.get('content-length', 0))
+                # Check if the 'content-length' header is present and valid
+                # total_size = int(download_response.headers.get('content-length', 0))
+                # if 'content-length' in download_response.headers else None
+
+                # TODO: test if file error (e.g. directory doesn't exist)
+                self.chunk_size = 8192
+                with open(Path.cwd().joinpath(filename), "wb") as f, tqdm(
+                    desc="Downloading",
+                    total=total_size,
+                    unit="B",
+                    unit_scale=True,
+                    unit_divisor=1024,  # Use 1024 to display in KB
+                    disable=True  # Set to True to disable progress bar display
+                ) as pbar:
+                    start_time = time.time()
+                    bytes_so_far = [0]
+                    for chunk in download_response.iter_content(chunk_size=self.chunk_size):
+                        f.write(chunk)
+                        bytes_so_far[0] += len(chunk)
+                        # pbar.update(len(chunk))
+
+                        # Calculate percentage completion, ETA and download speed
+                        # NOTE: use `bytes_so_far[0]` instead of `pbar.n` because `pbar.n` always gives 0
+                        percentage_completion = (bytes_so_far[0] / total_size) * 100 if total_size is not None and total_size > 0 else 0
+                        # Elapsed time in seconds
+                        elapsed_time = time.time() - start_time
+                        # Download speed in B/s
+                        download_speed = bytes_so_far[0] / elapsed_time if elapsed_time > 0 else 0
+                        # ETA in seconds
+                        eta = (total_size - bytes_so_far[0]) / download_speed if download_speed > 0 else 0
+                        size_downloaded = self.format_size(bytes_so_far[0])
+
+                        # TODO: remove print
+                        # print(f"ETA: {eta:.2f} seconds | Download Speed: {download_speed:.2f} KB/s", end='\r')
+                        # Download speed: convert B/s to KB/s
+                        # ETA: convert s to mins
+                        self.gui_update_queue.put((filename, size_downloaded, mirror, f"{percentage_completion:.2f}%",
+                                                   "Downloading", f"{download_speed/1024:.2f} KB/s",
+                                                   f"{eta/60:.2f} mins"))
+
                         with self.lock_stop_thread:
                             if th_name in self.shared_stop_thread:
-                                self.gui_update_queue.put((f"{th_name}: thread will stop what it was doing", "debug"))
+                                self.gui_update_queue.put((f"{th_name}: thread will stop what it is doing", "debug"))
                                 stop = True
                                 self.shared_stop_thread.remove(th_name)
                                 break
-                if stop:
-                    break
+                        pause = False
+                        with self.lock_pause_thread:
+                            if th_name in self.shared_pause_thread:
+                                self.gui_update_queue.put((f"{th_name}: thread will pause what it is doing", "debug"))
+                                self.gui_update_queue.put(
+                                    (filename, size, mirror, f"{percentage_completion}%", "Paused", "-", "-"))
+                                self.shared_pause_thread.remove(th_name)
+                                pause = True
+                        if pause:
+                            while True:
+                                # self.gui_update_queue.put((f"{th_name}: thread will sleep", "debug"))
+                                time.sleep(0.1)
+                                # self.gui_update_queue.put((f"{th_name}: thread will check if it can resume", "debug"))
+                                with self.lock_resume_thread:
+                                    if th_name in self.shared_resume_thread:
+                                        self.gui_update_queue.put(
+                                            (f"{th_name}: thread will resume what it was doing", "debug"))
+                                        self.shared_resume_thread.remove(th_name)
+                                        break
+                                # TODO: factorization, code block used above
+                                with self.lock_stop_thread:
+                                    if th_name in self.shared_stop_thread:
+                                        self.gui_update_queue.put((f"{th_name}: thread will stop what it was doing",
+                                                                   "debug"))
+                                        stop = True
+                                        self.shared_stop_thread.remove(th_name)
+                                        break
+                        if stop:
+                            break
+
+            session.close()
             if not stop:
                 # Update status to indicate download completion
                 self.gui_update_queue.put((f"{th_name}: finished downloading "
@@ -648,6 +789,7 @@ class EbookDownloader:
             else:
                 stop = False
                 self.gui_update_queue.put((filename, size, mirror, f"{progress}%", "Canceled", "-", "-"))
+
             self.update_mirror_counter_with_lock(mirror, -1)
             self.gui_update_queue.put((f"{th_name}: thread waiting for work...", "debug"))
             while True:
@@ -658,14 +800,21 @@ class EbookDownloader:
                         _, _, mirror = self.shared_download_queue[0]
                         # TODO: use lock for reading shared_nb_mirror1 and shared_nb_mirror2?
                         with self.get_mirror_lock(mirror):
-                            if mirror == 'mirror1' and self.shared_nb_mirror1 < 3 or mirror == 'mirror2' and self.shared_nb_mirror2 < 3:
+                            if mirror == 1 and self.shared_nb_mirror1 < 3 or mirror == 2 and self.shared_nb_mirror2 < 3:
                                 filename, size, mirror = self.shared_download_queue.pop(0)
                                 self.update_mirror_counter_without_lock(mirror, 1)
                                 break
                     else:
                         time.sleep(0.1)
             self.gui_update_queue.put((f"{th_name}: starting new download with "
-                                       f"filename={filename} and {mirror}", "debug"))
+                                       f"filename={filename} and mirror={mirror}", "debug"))
+
+    @staticmethod
+    def format_size(size):
+        for unit in ['B', 'KB', 'MB', 'GB']:
+            if size < 1024.0:
+                return f"{size:.2f} {unit}"
+            size /= 1024.0
 
     # Update mirror counter with the appropriate lock
     def update_mirror_counter_with_lock(self, mirror, value):
