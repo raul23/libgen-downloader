@@ -85,6 +85,25 @@ class EbookDownloader:
         self.shared_stop_thread = set()
         self.first_search = False
 
+        self.query = None
+        # domains = [libgen.rocks, libgen.lc, libgen.li, libgen.gs, libgen.vg, libgen.pm]
+        self.domain = "https://libgen.pm"
+        # e.g. extensions = ['epub', 'pdf']
+        # all extensions: extensions = ['all']
+        self.extensions = ['all']
+        # e.g. languages = ['english', 'french', 'spanish']
+        # all languages: languages = ['all']
+        self.languages = ['all']
+        # e.g. options_mirrors = [2, 1]
+        # 1: libgen, 2: libgen.is, 3: annas-archive.org, 4: sci-hub.ru, 5: bookfi.net
+        options_mirrors = []
+        #  results_per_page = 25 OR 50 OR 100
+        self.results_per_page = 25
+        self.headers = {
+            "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) "
+                          "QtWebEngine/5.15.5 Chrome/87.0.4280.144 Safari/537.36"
+        }
+
         # Separate locks for different resources
         self.lock_mirror1 = threading.Lock()
         self.lock_mirror2 = threading.Lock()
@@ -286,20 +305,6 @@ class EbookDownloader:
                 self.query = self.search_entry.get()
                 logger.info(f"Query: '{self.query}'")
 
-                # domains = [libgen.rocks, libgen.lc, libgen.li, libgen.gs, libgen.vg, libgen.pm]
-                self.domain = "https://libgen.pm"
-                # e.g. extensions = ['epub', 'pdf']
-                # all extensions: extensions = ['all']
-                self.extensions = ['all']
-                # e.g. languages = ['english', 'french', 'spanish']
-                # all languages: languages = ['all']
-                self.languages = ['all']
-                # e.g. options_mirrors = [2, 1]
-                # 1: libgen, 2: libgen.is, 3: annas-archive.org, 4: sci-hub.ru, 5: bookfi.net
-                options_mirrors = []
-                #  results_per_page = 25 OR 50 OR 100
-                self.results_per_page = 25
-
                 # Search in fields (Columns): Title, Author(s), Series, Year, ISBN
                 # Search in Objects: Files
                 # Search in Topics: Libgen and Fiction
@@ -328,10 +333,6 @@ class EbookDownloader:
             if self.url in self.books_per_url and page in self.books_per_url[self.url]:
                 books = self.books_per_url[self.url][page]["books"]
             else:
-                self.headers = {
-                    "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) "
-                                  "QtWebEngine/5.15.5 Chrome/87.0.4280.144 Safari/537.36"
-                }
 
                 def retrieve_search_results():
                     # We are going to do some work
@@ -470,7 +471,9 @@ class EbookDownloader:
                     if not mirrors:
                         if self.get_logging_level() == 'Debug':
                             print("HTML:\n", cells[8].prettify(), "\n---\n")
-                        logger.warning(f"Could not find the mirror element. Please check the selector or the mirror index.")
+                        logger.warning("Could not find the mirror element. "
+                                       "Please check the selector or the "
+                                       "mirror index.")
                         logger.warning("*" * 30)
                         continue
 
