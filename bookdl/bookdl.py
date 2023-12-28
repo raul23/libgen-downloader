@@ -172,7 +172,7 @@ class EbookDownloader:
                 pass
 
     # Update the GUI based on the received update. It is done from the main thread
-    # TODO: check that it is really performed by the main threadgui_update_thread
+    # TODO: check that it is really performed by the main thread
     def update_gui(self, update):
         if len(update) == 7:
             # Update the Download tree
@@ -573,112 +573,115 @@ class EbookDownloader:
             tree.column(col_name, width=col_width, anchor=anchor, stretch=0)
         return tree
 
-    def download_selected(self, mirror):
-        logger.debug(f"Downloading {len(self.selected_items_from_search_tree)} file(s) with mirror={mirror}")
-        # TODO: one thread per selected item from the search table
-        for item in self.selected_items_from_search_tree:
-            # TODO: only retrieve info that are needed
-            book_id, title, authors, publisher, year, language, pages, size, ext = self.search_tree.item(item, "values")
+    def thread_func(self, item, mirror):
+        # TODO: only retrieve info that are needed
+        book_id, title, authors, publisher, year, language, pages, size, ext = self.search_tree.item(item, "values")
 
-            # Ref.: https://github.com/carterprince/libby/blob/main/libby
-            nb_retries1 = 0
-            nb_retries2 = 0
-            mirror_soup = None
-            download_url = None
-            next_step = False
-            while nb_retries1 <= self.max_retries and nb_retries2 <= self.max_retries:
-                if not next_step:
-                    mirror_url = self.books[book_id]['mirrors'][mirror]
-                    # TODO: catch `requests.exceptions.SSLError` e.g. 504 Gateway Time-out
-                    mirror_response = requests.get(mirror_url, headers=self.headers)
-                    if mirror_response.status_code != 200:
-                        # TODO: code factorization
-                        nb_retries1 += 1
-                        msg = "Couldn't process mirror URL"
-                        if nb_retries1 == self.max_retries:
-                            logger.warning(msg + ". Will retry again.")
-                            logger.debug(f"Sleeping [retry1={nb_retries1}] ...")
-                            time.sleep(self.delay_between_retries)
-                        else:
-                            logger.warning(msg)
-                    else:
-                        mirror_soup = BeautifulSoup(mirror_response.text, "html.parser")
-                        next_step = True
-                else:
-                    try:
-                        assert mirror_soup
-                        download_url = mirror_soup.find("a", string="GET")["href"].replace("\get.php", "/get.php")
-                        break
-                    except TypeError:
-                        # e.g. TypeError: 'NoneType' object is not subscriptable
-                        nb_retries2 += 1
-                        msg = "Couldn't find download URL"
-                        if nb_retries2 == self.max_retries:
-                            logger.warning(msg + ". Will retry again.")
-                            logger.debug(f"Sleeping [retry2={nb_retries2}] ...")
-                            time.sleep(self.delay_between_retries)
-                        else:
-                            logger.warning(msg)
-
-            if nb_retries1 > self.max_retries or nb_retries2 > self.max_retries:
-                logger.warning(f"Skipped mirror URL: {mirror_url}")
-                continue
-
-            assert download_url
-            nb_retries = 0
-            download_response = None
-            while nb_retries <= self.max_retries:
-                download_response = requests.get(download_url, headers=self.headers, stream=True)
-                if download_response.status_code != 200:
-                    nb_retries += 1
-                    msg = "Couldn't process download URL"
-                    if nb_retries == self.max_retries:
+        # Ref.: https://github.com/carterprince/libby/blob/main/libby
+        nb_retries1 = 0
+        nb_retries2 = 0
+        mirror_soup = None
+        download_url = None
+        next_step = False
+        while nb_retries1 <= self.max_retries and nb_retries2 <= self.max_retries:
+            if not next_step:
+                mirror_url = self.books[book_id]['mirrors'][mirror]
+                # TODO: catch `requests.exceptions.SSLError` e.g. 504 Gateway Time-out
+                mirror_response = requests.get(mirror_url, headers=self.headers)
+                if mirror_response.status_code != 200:
+                    # TODO: code factorization
+                    nb_retries1 += 1
+                    msg = "Couldn't process mirror URL"
+                    if nb_retries1 == self.max_retries:
                         logger.warning(msg + ". Will retry again.")
-                        logger.debug(f"Sleeping [retry={nb_retries}] ...")
+                        logger.debug(f"Sleeping [retry1={nb_retries1}] ...")
                         time.sleep(self.delay_between_retries)
                     else:
                         logger.warning(msg)
                 else:
+                    mirror_soup = BeautifulSoup(mirror_response.text, "html.parser")
+                    next_step = True
+            else:
+                try:
+                    assert mirror_soup
+                    download_url = mirror_soup.find("a", string="GET")["href"].replace("\get.php", "/get.php")
                     break
+                except TypeError:
+                    # e.g. TypeError: 'NoneType' object is not subscriptable
+                    nb_retries2 += 1
+                    msg = "Couldn't find download URL"
+                    if nb_retries2 == self.max_retries:
+                        logger.warning(msg + ". Will retry again.")
+                        logger.debug(f"Sleeping [retry2={nb_retries2}] ...")
+                        time.sleep(self.delay_between_retries)
+                    else:
+                        logger.warning(msg)
 
-            if nb_retries > self.max_retries:
-                logger.warning(f"Skipped download URL [{download_response.status_code}]: {download_url}")
-                continue
+        if nb_retries1 > self.max_retries or nb_retries2 > self.max_retries:
+            logger.warning(f"Skipped mirror URL: {mirror_url}")
+            return
+
+        assert download_url
+        nb_retries = 0
+        download_response = None
+        while nb_retries <= self.max_retries:
+            download_response = requests.get(download_url, headers=self.headers, stream=True)
+            if download_response.status_code != 200:
+                nb_retries += 1
+                msg = "Couldn't process download URL"
+                if nb_retries == self.max_retries:
+                    logger.warning(msg + ". Will retry again.")
+                    logger.debug(f"Sleeping [retry={nb_retries}] ...")
+                    time.sleep(self.delay_between_retries)
+                else:
+                    logger.warning(msg)
             else:
-                # TODO: necessary?
-                assert download_response
-                download_response.close()
+                break
 
-            # Generate unique filename from response to download URL
-            filepath = unique_filename(Path.cwd(), pyrfc6266.requests_response_to_filename(download_response))
-            filename = Path(filepath).name
-            logger.debug(f"Filename: {Path(filepath).name}")
-            self.download_tree.insert("", "end", values=(filename, size, mirror, "0%", "Waiting"))
-            self.filenames.setdefault(filename, {'book_id': book_id,
-                                                 'download_url': download_url})
+        if nb_retries > self.max_retries:
+            logger.warning(f"Skipped download URL [{download_response.status_code}]: {download_url}")
+            return
+        else:
+            # TODO: necessary?
+            assert download_response
+            download_response.close()
 
-            # TODO: use lock for reading `shared_nb_mirror1` and `shared_nb_mirror2`?
-            if mirror == 1 and self.shared_nb_mirror1 == 3 or \
-                    mirror == 2 and self.shared_nb_mirror2 == 3:
-                add_to_queue = True
-            else:
-                add_to_queue = False
+        # Generate unique filename from response to download URL
+        filepath = unique_filename(Path.cwd(), pyrfc6266.requests_response_to_filename(download_response))
+        filename = Path(filepath).name
+        logger.debug(f"Filename: {Path(filepath).name}")
+        self.download_tree.insert("", "end", values=(filename, size, mirror, "0%", "Waiting"))
+        self.filenames.setdefault(filename, {'book_id': book_id,
+                                             'download_url': download_url})
 
-            # Start download in a separate thread
-            if not add_to_queue and self.nb_threads < 6:
-                th_name = f"Thread-{self.nb_threads + 1}"
-                thread = threading.Thread(target=self.download_ebook, args=(filename, size, mirror, th_name, download_url))
-                thread.daemon = True
-                thread.start()
-                self.nb_threads += 1
-                logger.debug(f"Thread created: {th_name}")
+        # TODO: use lock for reading `shared_nb_mirror1` and `shared_nb_mirror2`?
+        if mirror == 1 and self.shared_nb_mirror1 == 3 or \
+                mirror == 2 and self.shared_nb_mirror2 == 3:
+            add_to_queue = True
+        else:
+            add_to_queue = False
 
-                # Update mirror counter without holding the lock
-                self.update_mirror_counter_with_lock(mirror, 1)
-            else:
-                logger.debug(f"Adding work to download queue: filename={filename} and mirror={mirror}")
-                with self.lock_download_queue:
-                    self.shared_download_queue.append((filename, size, mirror))
+        # Start download in a separate thread
+        if not add_to_queue and self.nb_threads < 6:
+            th_name = f"Thread-{self.nb_threads + 1}"
+            thread = threading.Thread(target=self.download_ebook, args=(filename, size, mirror, th_name, download_url))
+            thread.daemon = True
+            thread.start()
+            self.nb_threads += 1
+            logger.debug(f"Thread created: {th_name}")
+
+            # Update mirror counter without holding the lock
+            self.update_mirror_counter_with_lock(mirror, 1)
+        else:
+            logger.debug(f"Adding work to download queue: filename={filename} and mirror={mirror}")
+            with self.lock_download_queue:
+                self.shared_download_queue.append((filename, size, mirror))
+
+    def download_selected(self, mirror):
+        logger.debug(f"Downloading {len(self.selected_items_from_search_tree)} file(s) with mirror={mirror}")
+        # TODO IMPORTANT: one thread per selected item from the search table
+        for item in self.selected_items_from_search_tree:
+            threading.Thread(target=self.thread_func, args=(item, mirror), daemon=True).start()
 
     # Worker thread
     # IMPORTANT: within a thread, you can't use `logger`, you must use `gui_update_queue` since it is the main thread
@@ -796,7 +799,7 @@ class EbookDownloader:
 
                     # Incomplete download
                     if not stop and total_size != bytes_so_far[0]:
-                        # TODO: add retry in this case
+                        # TODO IMPORTANT: add retry in this case
                         self.gui_update_queue.put((f"{th_name}: could only complete {percentage_completion:.2f}% of "
                                                    "the whole download.", "error"))
                         incomplete = True
