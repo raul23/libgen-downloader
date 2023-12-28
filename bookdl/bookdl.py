@@ -1,5 +1,6 @@
 import logging
 import math
+import os
 import queue
 import re
 import threading
@@ -165,12 +166,13 @@ class EbookDownloader:
             try:
                 # Get updates from the queue
                 update = self.gui_update_queue.get(timeout=1)
-                # Update the GUI from the main thread
+                # Update the GUI from the main thread. `update_gui` is called after 100 ms
                 self.root.after(100, self.update_gui, update)
             except queue.Empty:
                 pass
 
     # Update the GUI based on the received update. It is done from the main thread
+    # TODO: check that it is really performed by the main threadgui_update_thread
     def update_gui(self, update):
         if len(update) == 7:
             # Update the Download tree
@@ -218,18 +220,14 @@ class EbookDownloader:
         page_combobox.set("Select Page")
         page_combobox.grid(row=3, column=2, padx=(0, 20), pady=10, sticky="e")
 
-        """
-        def on_page_select(*args):
-            selected_page = page_var.get()
-        """
-
         self.page_var.trace_add("write", self.on_page_select)
 
         # Download Queue Table
-        columns = {'Filename': 522, 'Size': 55, 'Mirror': 55, 'Progress': 55, 'Status': 100, 'Speed': 55, 'ETA': 50}
+        columns = {'Filename': 455, 'Size': 75, 'Mirror': 50, 'Progress': 60, 'Status': 100, 'Speed': 90, 'ETA': 50}
         downloadFrame = tk.LabelFrame(self.root, text='Download')
         downloadFrame.grid(row=1, column=0, padx=(15, 0), pady=(10, 0), sticky='nsw')
-        self.download_tree = self.create_table(downloadFrame, columns, height=12)
+        self.download_tree = self.create_table(downloadFrame, columns, anchor='center', height=12)
+        self.download_tree.column('Filename', anchor='w')
         self.download_tree.grid(row=0, column=0, padx=(5, 25), pady=(10, 0), sticky='nsew')
         self.download_tree.bind('<ButtonRelease-1>', self.select_items_from_download_tree)
         self.download_tree.bind('<Button-2>', self.show_popup_menu_for_download_table)
@@ -350,7 +348,6 @@ class EbookDownloader:
                 self.book_ids_per_urls.setdefault(self.url, {})
                 logger.debug(self.url)
             else:
-                # ipdb.set_trace()
                 pass
 
             assert self.url
@@ -577,7 +574,7 @@ class EbookDownloader:
         return tree
 
     def download_selected(self, mirror):
-        logger.debug(f"Downloading {len(self.selected_items_from_search_tree)} file(s) with {mirror}")
+        logger.debug(f"Downloading {len(self.selected_items_from_search_tree)} file(s) with mirror={mirror}")
         # TODO: one thread per selected item from the search table
         for item in self.selected_items_from_search_tree:
             # TODO: only retrieve info that are needed
@@ -589,15 +586,21 @@ class EbookDownloader:
             mirror_soup = None
             download_url = None
             next_step = False
-            while nb_retries1 <= self.max_retries or nb_retries2 <= self.max_retries:
+            while nb_retries1 <= self.max_retries and nb_retries2 <= self.max_retries:
                 if not next_step:
                     mirror_url = self.books[book_id]['mirrors'][mirror]
+                    # TODO: catch `requests.exceptions.SSLError` e.g. 504 Gateway Time-out
                     mirror_response = requests.get(mirror_url, headers=self.headers)
                     if mirror_response.status_code != 200:
+                        # TODO: code factorization
                         nb_retries1 += 1
-                        logger.warning("Couldn't process mirror URL. Will retry again.")
-                        logger.debug(f"Sleeping [retry1={nb_retries1}] ...")
-                        time.sleep(self.delay_between_retries)
+                        msg = "Couldn't process mirror URL"
+                        if nb_retries1 == self.max_retries:
+                            logger.warning(msg + ". Will retry again.")
+                            logger.debug(f"Sleeping [retry1={nb_retries1}] ...")
+                            time.sleep(self.delay_between_retries)
+                        else:
+                            logger.warning(msg)
                     else:
                         mirror_soup = BeautifulSoup(mirror_response.text, "html.parser")
                         next_step = True
@@ -608,13 +611,16 @@ class EbookDownloader:
                         break
                     except TypeError:
                         # e.g. TypeError: 'NoneType' object is not subscriptable
-                        ipdb.set_trace()
                         nb_retries2 += 1
-                        logger.warning("Couldn't find download URL. Will retry again.")
-                        logger.debug(f"Sleeping [retry2={nb_retries2}] ...")
-                        time.sleep(self.delay_between_retries)
+                        msg = "Couldn't find download URL"
+                        if nb_retries2 == self.max_retries:
+                            logger.warning(msg + ". Will retry again.")
+                            logger.debug(f"Sleeping [retry2={nb_retries2}] ...")
+                            time.sleep(self.delay_between_retries)
+                        else:
+                            logger.warning(msg)
 
-            if nb_retries1 >= self.max_retries or nb_retries2 >= self.max_retries:
+            if nb_retries1 > self.max_retries or nb_retries2 > self.max_retries:
                 logger.warning(f"Skipped mirror URL: {mirror_url}")
                 continue
 
@@ -625,13 +631,17 @@ class EbookDownloader:
                 download_response = requests.get(download_url, headers=self.headers, stream=True)
                 if download_response.status_code != 200:
                     nb_retries += 1
-                    logger.warning("Couldn't process download URL. Will retry again.")
-                    logger.debug(f"Sleeping [retry={nb_retries}] ...")
-                    time.sleep(self.delay_between_retries)
+                    msg = "Couldn't process download URL"
+                    if nb_retries == self.max_retries:
+                        logger.warning(msg + ". Will retry again.")
+                        logger.debug(f"Sleeping [retry={nb_retries}] ...")
+                        time.sleep(self.delay_between_retries)
+                    else:
+                        logger.warning(msg)
                 else:
                     break
 
-            if nb_retries >= self.max_retries:
+            if nb_retries > self.max_retries:
                 logger.warning(f"Skipped download URL [{download_response.status_code}]: {download_url}")
                 continue
             else:
@@ -666,11 +676,13 @@ class EbookDownloader:
                 # Update mirror counter without holding the lock
                 self.update_mirror_counter_with_lock(mirror, 1)
             else:
-                logger.debug(f"Adding work to download queue: filename={filename} and {mirror}")
+                logger.debug(f"Adding work to download queue: filename={filename} and mirror={mirror}")
                 with self.lock_download_queue:
                     self.shared_download_queue.append((filename, size, mirror))
 
     # Worker thread
+    # IMPORTANT: within a thread, you can't use `logger`, you must use `gui_update_queue` since it is the main thread
+    # that is in charge of logging directly to the logs widget
     def download_ebook(self, filename, size, mirror, th_name, download_url):
         thread = threading.current_thread()
         thread.setName(th_name)
@@ -684,19 +696,31 @@ class EbookDownloader:
             nb_retries = 0
             download_response = None
             # Create a session
+            # TODO: session necessary?
             session = requests.Session()
             while nb_retries <= self.max_retries:
                 download_response = session.get(download_url, headers=self.headers, stream=True)
                 if download_response.status_code != 200:
                     nb_retries += 1
-                    logger.warning("Couldn't process download URL. Will retry again.")
-                    logger.debug(f"Sleeping [retry={nb_retries}] ...")
+                    msg = "Couldn't process download URL"
+                    if nb_retries == self.max_retries:
+                        self.gui_update_queue.put((f"{th_name}: {msg}. Will retry again.", "warning"))
+                        self.gui_update_queue.put((f"{th_name}: sleeping [retry={nb_retries}] ...", "debug"))
+                        time.sleep(self.delay_between_retries)
+                    else:
+                        self.gui_update_queue.put((f"{th_name}: {msg}", "warning"))
                     time.sleep(self.delay_between_retries)
                 else:
                     break
 
-            if nb_retries >= self.max_retries:
-                logger.warning(f"Skipped download URL [download_response.status_code]: {download_url}")
+            percentage_completion = 0
+            total_size = ""
+            size_downloaded = "0 MB"
+            bytes_so_far = [0]
+            incomplete = False
+            if nb_retries > self.max_retries:
+                self.gui_update_queue.put(
+                    (f"{th_name}: skipped download URL [{download_response.status_code}]: {download_url}", "warning"))
                 stop = True
             else:
                 # TODO: necessary?
@@ -707,10 +731,8 @@ class EbookDownloader:
                 # if 'content-length' in download_response.headers else None
 
                 # TODO: test if file error (e.g. directory doesn't exist)
-                self.chunk_size = 8192
                 with open(Path.cwd().joinpath(filename), "wb") as f:
                     start_time = time.time()
-                    bytes_so_far = [0]
                     for chunk in download_response.iter_content(chunk_size=self.chunk_size):
                         f.write(chunk)
                         bytes_so_far[0] += len(chunk)
@@ -727,20 +749,19 @@ class EbookDownloader:
                         download_speed_formatted = self.format_size(download_speed) + '/s'
                         size_downloaded = self.format_size(bytes_so_far[0])
 
-                        # TODO: remove print
-                        # print(f"ETA: {eta:.2f} seconds | Download Speed: {download_speed:.2f} KB/s", end='\r')
-                        # Download speed: convert B/s to KB/s
-                        # ETA: convert s to mins
                         self.gui_update_queue.put((filename, size_downloaded, mirror, f"{percentage_completion:.2f}%",
                                                    "Downloading", f"{download_speed_formatted}",
                                                    f"{eta_formatted}"))
 
+                        # Stop (cancel) thread
                         with self.lock_stop_thread:
                             if th_name in self.shared_stop_thread:
                                 self.gui_update_queue.put((f"{th_name}: thread will stop what it is doing", "debug"))
                                 stop = True
                                 self.shared_stop_thread.remove(th_name)
                                 break
+
+                        # Pause thread
                         pause = False
                         with self.lock_pause_thread:
                             if th_name in self.shared_pause_thread:
@@ -749,6 +770,8 @@ class EbookDownloader:
                                     (filename, size, mirror, f"{percentage_completion}%", "Paused", "-", "-"))
                                 self.shared_pause_thread.remove(th_name)
                                 pause = True
+
+                        # Resume thread
                         if pause:
                             while True:
                                 # self.gui_update_queue.put((f"{th_name}: thread will sleep", "debug"))
@@ -771,16 +794,31 @@ class EbookDownloader:
                         if stop:
                             break
 
+                    # Incomplete download
+                    if not stop and total_size != bytes_so_far[0]:
+                        # TODO: add retry in this case
+                        self.gui_update_queue.put((f"{th_name}: could only complete {percentage_completion:.2f}% of "
+                                                   "the whole download.", "error"))
+                        incomplete = True
+
             session.close()
-            if not stop:
+            if incomplete:
+                self.remove_file(Path.cwd().joinpath(filename))
+                self.gui_update_queue.put(
+                    (filename, "-", mirror, f"{percentage_completion:.2f}%", "Incomplete", "-", "-"))
+            elif stop:
+                self.remove_file(Path.cwd().joinpath(filename))
+                stop = False
+                self.gui_update_queue.put(
+                    (filename, "-", mirror, f"{percentage_completion:.2f}%", "Canceled", "-", "-"))
+            else:
                 # Update status to indicate download completion
+                self.gui_update_queue.put((f"{th_name}: {percentage_completion:.2f}%, {total_size}, {size_downloaded}, "
+                                           f"{bytes_so_far[0]}", "warning"))
                 self.gui_update_queue.put((f"{th_name}: finished downloading "
                                            "and updating status with "
                                            f"filename={filename} and {mirror}", "debug"))
-                self.gui_update_queue.put((filename, size, mirror, "100%", "Downloaded", "-", "-"))
-            else:
-                stop = False
-                self.gui_update_queue.put((filename, size, mirror, f"{progress}%", "Canceled", "-", "-"))
+                self.gui_update_queue.put((filename, size_downloaded, mirror, "100%", "Downloaded", "-", "-"))
 
             self.update_mirror_counter_with_lock(mirror, -1)
             self.gui_update_queue.put((f"{th_name}: thread waiting for work...", "debug"))
@@ -810,7 +848,7 @@ class EbookDownloader:
 
     @staticmethod
     def format_time(seconds):
-        intervals = [('days', 86400), ('hours', 3600), ('minutes', 60), ('seconds', 1)]
+        intervals = [('days', 86400), ('hrs', 3600), ('mins', 60), ('secs', 1)]
         result = []
         for name, count in intervals:
             value = seconds // count
@@ -818,6 +856,15 @@ class EbookDownloader:
                 result.append(f"{int(value)} {name}")
             seconds %= count
         return ', '.join(result)
+
+    def remove_file(self, file_path):
+        # Ref.: https://stackoverflow.com/a/42641792
+        try:
+            os.remove(file_path)
+            return 0
+        except OSError as e:
+            self.gui_update_queue.put((f"{e.filename} - {e.strerror}.", "error"))
+            return 1
 
     # Update mirror counter with the appropriate lock
     def update_mirror_counter_with_lock(self, mirror, value):
