@@ -23,7 +23,7 @@ import ipdb
 __version__ = "0.0.0a0"
 
 logger = logging.getLogger("bookdl")
-DEFAULT_LOGGING_LEVEL = 'Info'
+DEFAULT_LOGGING_LEVEL = 'Debug'
 MIRROR_SOURCES = ["GET", "Cloudflare", "IPFS.io", "Crust", "Pinata"]
 
 RESPONSE = None
@@ -97,7 +97,6 @@ class EbookDownloader:
         self.toggle_var = tk.IntVar()
         self.toggle_label = tk.StringVar()
         self.gui_update_queue = queue.Queue()
-        self.nb_threads = 0
         self.filenames_by_threads = {}
         self.shared_nb_mirror1 = 0
         self.shared_nb_mirror2 = 0
@@ -105,6 +104,7 @@ class EbookDownloader:
         self.shared_pause_thread = set()
         self.shared_resume_thread = set()
         self.shared_stop_thread = set()
+        self.shared_nb_threads = 0
         self.first_search = False
         self.max_retries = 1
         self.delay_between_retries = 0.5
@@ -137,6 +137,7 @@ class EbookDownloader:
         self.lock_pause_thread = threading.Lock()
         self.lock_resume_thread = threading.Lock()
         self.lock_stop_thread = threading.Lock()
+        self.lock_nb_threads = threading.Lock()
 
         # Start a separate thread for GUI updates
         threading.Thread(target=self.gui_update_thread, daemon=True).start()
@@ -152,7 +153,8 @@ class EbookDownloader:
     def setup_logger(self):
         logger.setLevel(DEFAULT_LOGGING_LEVEL.upper())
 
-        handler = TKTextHandler(self.logging_text)
+        # handler = TKTextHandler(self.logging_text)
+        handler = logging.StreamHandler()
         # '%(asctime)s - %(levelname)s - %(message)s'
         formatter = logging.Formatter('%(levelname)s - %(message)s')
         handler.setFormatter(formatter)
@@ -573,6 +575,7 @@ class EbookDownloader:
             tree.column(col_name, width=col_width, anchor=anchor, stretch=0)
         return tree
 
+    # TODO: change function name
     def thread_func(self, item, mirror):
         # TODO: only retrieve info that are needed
         book_id, title, authors, publisher, year, language, pages, size, ext = self.search_tree.item(item, "values")
@@ -655,22 +658,22 @@ class EbookDownloader:
                                              'download_url': download_url})
 
         # TODO: use lock for reading `shared_nb_mirror1` and `shared_nb_mirror2`?
-        if mirror == 1 and self.shared_nb_mirror1 == 3 or \
-                mirror == 2 and self.shared_nb_mirror2 == 3:
+        if mirror == 1 and self.shared_nb_mirror1 > 2 or \
+                mirror == 2 and self.shared_nb_mirror2 > 2:
             add_to_queue = True
         else:
             add_to_queue = False
+        logger.debug(f'{self.shared_nb_mirror1} and {self.shared_nb_mirror2}')
 
         # Start download in a separate thread
-        if not add_to_queue and self.nb_threads < 6:
-            th_name = f"Thread-{self.nb_threads + 1}"
+        if not add_to_queue and self.shared_nb_threads < 6:
+            th_name = f"Thread-{self.shared_nb_threads + 1}"
             thread = threading.Thread(target=self.download_ebook, args=(filename, size, mirror, th_name, download_url))
             thread.daemon = True
             thread.start()
-            self.nb_threads += 1
+            with self.lock_nb_threads:
+                self.shared_nb_threads += 1
             logger.debug(f"Thread created: {th_name}")
-
-            # Update mirror counter without holding the lock
             self.update_mirror_counter_with_lock(mirror, 1)
         else:
             logger.debug(f"Adding work to download queue: filename={filename} and mirror={mirror}")
@@ -679,7 +682,7 @@ class EbookDownloader:
 
     def download_selected(self, mirror):
         logger.debug(f"Downloading {len(self.selected_items_from_search_tree)} file(s) with mirror={mirror}")
-        # TODO IMPORTANT: one thread per selected item from the search table
+        # One thread per item selected from the Search table
         for item in self.selected_items_from_search_tree:
             threading.Thread(target=self.thread_func, args=(item, mirror), daemon=True).start()
 
@@ -806,11 +809,13 @@ class EbookDownloader:
 
             session.close()
             if incomplete:
-                self.remove_file(Path.cwd().joinpath(filename))
+                if Path.cwd().joinpath(filename).exists():
+                    self.remove_file(Path.cwd().joinpath(filename))
                 self.gui_update_queue.put(
                     (filename, "-", mirror, f"{percentage_completion:.2f}%", "Incomplete", "-", "-"))
             elif stop:
-                self.remove_file(Path.cwd().joinpath(filename))
+                if Path.cwd().joinpath(filename).exists():
+                    self.remove_file(Path.cwd().joinpath(filename))
                 stop = False
                 self.gui_update_queue.put(
                     (filename, "-", mirror, f"{percentage_completion:.2f}%", "Canceled", "-", "-"))
@@ -828,17 +833,17 @@ class EbookDownloader:
             while True:
                 # Get the next ebook to download from the top of the download queue
                 # i.e. the least recent ebook added
-                with self.lock_download_queue:
-                    if self.shared_download_queue:
+                if self.shared_download_queue:
+                    with self.lock_download_queue:
                         _, _, mirror = self.shared_download_queue[0]
-                        # TODO: use lock for reading shared_nb_mirror1 and shared_nb_mirror2?
-                        with self.get_mirror_lock(mirror):
-                            if mirror == 1 and self.shared_nb_mirror1 < 3 or mirror == 2 and self.shared_nb_mirror2 < 3:
-                                filename, size, mirror = self.shared_download_queue.pop(0)
-                                self.update_mirror_counter_without_lock(mirror, 1)
-                                break
-                    else:
-                        time.sleep(0.1)
+                    # TODO: use lock for reading shared_nb_mirror1 and shared_nb_mirror2?
+                    with self.get_mirror_lock(mirror):
+                        if mirror == 1 and self.shared_nb_mirror1 < 3 or mirror == 2 and self.shared_nb_mirror2 < 3:
+                            filename, size, mirror = self.shared_download_queue.pop(0)
+                            self.update_mirror_counter_without_lock(mirror, 1)
+                            break
+                else:
+                    time.sleep(0.1)
             self.gui_update_queue.put((f"{th_name}: starting new download with "
                                        f"filename={filename} and mirror={mirror}", "debug"))
 
@@ -875,14 +880,14 @@ class EbookDownloader:
             self.update_mirror_counter_without_lock(mirror, value)
 
     def update_mirror_counter_without_lock(self, mirror, value):
-        if mirror == 'mirror1':
+        if mirror == 1:
             self.shared_nb_mirror1 += value
         else:
             self.shared_nb_mirror2 += value
 
     # Return the lock associated with the mirror
     def get_mirror_lock(self, mirror):
-        if mirror == 'mirror1':
+        if mirror == 1:
             return self.lock_mirror1
         else:
             return self.lock_mirror2
@@ -938,7 +943,8 @@ class EbookDownloader:
             if self.logger_is_setup and not logger.handlers:
                 level = self.get_logging_level()
                 logger.setLevel(level)
-                handler = TKTextHandler(self.logging_text)
+                # handler = TKTextHandler(self.logging_text)
+                handler = logging.StreamHandler()
                 formatter = logging.Formatter('%(levelname)s - %(message)s')
                 handler.setFormatter(formatter)
                 handler.setLevel(level)
