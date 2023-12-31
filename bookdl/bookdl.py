@@ -153,8 +153,8 @@ class EbookDownloader:
     def setup_logger(self):
         logger.setLevel(DEFAULT_LOGGING_LEVEL.upper())
 
-        # handler = TKTextHandler(self.logging_text)
-        handler = logging.StreamHandler()
+        handler = TKTextHandler(self.logging_text)
+        # handler = logging.StreamHandler()
         # '%(asctime)s - %(levelname)s - %(message)s'
         formatter = logging.Formatter('%(levelname)s - %(message)s')
         handler.setFormatter(formatter)
@@ -594,13 +594,13 @@ class EbookDownloader:
                 if mirror_response.status_code != 200:
                     # TODO: code factorization
                     nb_retries1 += 1
-                    msg = "Couldn't process mirror URL"
+                    msg = "Thread: couldn't process mirror URL"
                     if nb_retries1 == self.max_retries:
-                        logger.warning(msg + ". Will retry again.")
-                        logger.debug(f"Sleeping [retry1={nb_retries1}] ...")
+                        self.gui_update_queue.put((msg + ". Will retry again.", "warning"))
+                        self.gui_update_queue.put((f"Thread: sleeping [retry1={nb_retries1}] ...", "debug"))
                         time.sleep(self.delay_between_retries)
                     else:
-                        logger.warning(msg)
+                        self.gui_update_queue.put((msg, "warning"))
                 else:
                     mirror_soup = BeautifulSoup(mirror_response.text, "html.parser")
                     next_step = True
@@ -612,16 +612,16 @@ class EbookDownloader:
                 except TypeError:
                     # e.g. TypeError: 'NoneType' object is not subscriptable
                     nb_retries2 += 1
-                    msg = "Couldn't find download URL"
+                    msg = "Thread: Couldn't find download URL"
                     if nb_retries2 == self.max_retries:
-                        logger.warning(msg + ". Will retry again.")
-                        logger.debug(f"Sleeping [retry2={nb_retries2}] ...")
+                        self.gui_update_queue.put((msg + ". Will retry again.", "warning"))
+                        self.gui_update_queue.put((f"Sleeping [retry2={nb_retries2}] ...", "debug"))
                         time.sleep(self.delay_between_retries)
                     else:
-                        logger.warning(msg)
+                        self.gui_update_queue.put((msg, "warning"))
 
         if nb_retries1 > self.max_retries or nb_retries2 > self.max_retries:
-            logger.warning(f"Skipped mirror URL: {mirror_url}")
+            self.gui_update_queue.put((f"Thread: skipped mirror URL: {mirror_url}", "warning"))
             return
 
         assert download_url
@@ -631,18 +631,19 @@ class EbookDownloader:
             download_response = requests.get(download_url, headers=self.headers, stream=True)
             if download_response.status_code != 200:
                 nb_retries += 1
-                msg = "Couldn't process download URL"
+                msg = "Thread: couldn't process download URL"
                 if nb_retries == self.max_retries:
-                    logger.warning(msg + ". Will retry again.")
-                    logger.debug(f"Sleeping [retry={nb_retries}] ...")
+                    self.gui_update_queue.put((msg + ". Will retry again.", "warning"))
+                    self.gui_update_queue.put((f"Thread: sleeping [retry={nb_retries}] ...", "debug"))
                     time.sleep(self.delay_between_retries)
                 else:
-                    logger.warning(msg)
+                    self.gui_update_queue.put((msg, "warning"))
             else:
                 break
 
         if nb_retries > self.max_retries:
-            logger.warning(f"Skipped download URL [{download_response.status_code}]: {download_url}")
+            self.gui_update_queue.put((f"Thread: skipped download URL [{download_response.status_code}]: {download_url}",
+                                       "warning"))
             return
         else:
             # TODO: necessary?
@@ -652,10 +653,12 @@ class EbookDownloader:
         # Generate unique filename from response to download URL
         filepath = unique_filename(Path.cwd(), pyrfc6266.requests_response_to_filename(download_response))
         filename = Path(filepath).name
-        logger.debug(f"Filename: {Path(filepath).name}")
-        self.download_tree.insert("", "end", values=(filename, size, mirror, "0%", "Waiting"))
-        self.filenames.setdefault(filename, {'book_id': book_id,
-                                             'download_url': download_url})
+        self.gui_update_queue.put((f"Thread: filename={Path(filepath).name}", "debug"))
+        self.gui_update_queue.put((filename, size, mirror, "0%", "Waiting", "-", "-"))
+        # self.download_tree.insert("", "end", values=(filename, size, mirror, "0%", "Waiting", "-", "-"))
+        self.filenames.setdefault(filename,
+                                  {'book_id': book_id,
+                                   'download_url': download_url})
 
         # TODO: use lock for reading `shared_nb_mirror1` and `shared_nb_mirror2`?
         if mirror == 1 and self.shared_nb_mirror1 > 2 or \
@@ -663,7 +666,6 @@ class EbookDownloader:
             add_to_queue = True
         else:
             add_to_queue = False
-        logger.debug(f'{self.shared_nb_mirror1} and {self.shared_nb_mirror2}')
 
         # Start download in a separate thread
         if not add_to_queue and self.shared_nb_threads < 6:
@@ -673,10 +675,11 @@ class EbookDownloader:
             thread.start()
             with self.lock_nb_threads:
                 self.shared_nb_threads += 1
-            logger.debug(f"Thread created: {th_name}")
+            self.gui_update_queue.put((f"Thread created: {th_name}", "debug"))
             self.update_mirror_counter_with_lock(mirror, 1)
         else:
-            logger.debug(f"Adding work to download queue: filename={filename} and mirror={mirror}")
+            self.gui_update_queue.put((
+                f"Adding work to download queue: filename={filename} and mirror={mirror}", "debug"))
             with self.lock_download_queue:
                 self.shared_download_queue.append((filename, size, mirror))
 
@@ -687,6 +690,7 @@ class EbookDownloader:
             threading.Thread(target=self.thread_func, args=(item, mirror), daemon=True).start()
 
     # Worker thread
+    # TODO: change function to know it is thread-related
     # IMPORTANT: within a thread, you can't use `logger`, you must use `gui_update_queue` since it is the main thread
     # that is in charge of logging directly to the logs widget
     def download_ebook(self, filename, size, mirror, th_name, download_url):
@@ -901,7 +905,9 @@ class EbookDownloader:
                 except:
                     # TODO: remove try-except block
                     ipdb.set_trace()
-                break
+                return
+        # New item
+        self.download_tree.insert("", "end", values=(filename, size, mirror, progress, status, speed, eta))
 
     @staticmethod
     def update_log_table(msg, log_level):
@@ -943,8 +949,8 @@ class EbookDownloader:
             if self.logger_is_setup and not logger.handlers:
                 level = self.get_logging_level()
                 logger.setLevel(level)
-                # handler = TKTextHandler(self.logging_text)
-                handler = logging.StreamHandler()
+                handler = TKTextHandler(self.logging_text)
+                # handler = logging.StreamHandler()
                 formatter = logging.Formatter('%(levelname)s - %(message)s')
                 handler.setFormatter(formatter)
                 handler.setLevel(level)
