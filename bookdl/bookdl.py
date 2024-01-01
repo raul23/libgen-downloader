@@ -655,7 +655,6 @@ class EbookDownloader:
         filename = Path(filepath).name
         self.gui_update_queue.put((f"Thread: filename={Path(filepath).name}", "debug"))
         self.gui_update_queue.put((filename, size, mirror, "0%", "Waiting", "-", "-"))
-        # self.download_tree.insert("", "end", values=(filename, size, mirror, "0%", "Waiting", "-", "-"))
         self.filenames.setdefault(filename,
                                   {'book_id': book_id,
                                    'download_url': download_url})
