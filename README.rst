@@ -118,7 +118,7 @@ Changelog
 =========
 Version 0.0.0a0
 ---------------
-**December 19, 2023**
+**Not yet**
 
 - Initial release
 - Tested the application on different Python versions ...
