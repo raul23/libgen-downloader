@@ -86,6 +86,7 @@ class EbookDownloader:
         self.selected_items_from_search_tree = set()
         self.selected_items_from_download_tree = set()
         self.download_tree = None
+        self.download_ids = 0
         self.logging_text = None
         self.context_menu = None
         self.log_levels = [
@@ -98,6 +99,7 @@ class EbookDownloader:
         self.toggle_label = tk.StringVar()
         self.gui_update_queue = queue.Queue()
         self.filenames_by_threads = {}
+        self.download_ids_by_threads = {}
         self.shared_nb_mirror1 = 0
         self.shared_nb_mirror2 = 0
         self.shared_download_queue = []
@@ -174,16 +176,18 @@ class EbookDownloader:
                 pass
 
     # Update the GUI based on the received update. It is done from the main thread
-    # TODO: check that it is really performed by the main thread
+    # NOTE: it is performed by the main thread
     def update_gui(self, update):
-        if len(update) == 7:
+        if len(update) == 9:
             # Update the Download tree
-            filename, size, mirror, progress, status, speed, eta = update
-            self.update_download_status(filename, size, mirror, progress, status, speed, eta)
-        else:
+            download_id, book_id, filename, size, mirror, progress, status, speed, eta = update
+            self.update_download_status(download_id, book_id, filename, size, mirror, progress, status, speed, eta)
+        elif len(update) == 2:
             # Update the Log text
             msg, log_level = update
             self.update_log_table(msg, log_level)
+        else:
+            logger.error(f"Can't update the GUI correctly: only {len(update)} items from `update`")
 
     def create_widgets(self):
         # Search Entry and Button
@@ -195,7 +199,7 @@ class EbookDownloader:
         search_button.grid(row=0, column=0, padx=(480, 50), pady=(10, 0))
 
         # Search Results Table
-        columns = {'ID': 80, 'Title': 370, 'Author(s)': 255, 'Publisher': 200,
+        columns = {'BK-ID': 80, 'Title': 370, 'Author(s)': 255, 'Publisher': 200,
                    'Year': 50, 'Language': 120, 'Pages': 50, 'Size': 50,
                    'Extension': 50}
         self.search_tree = self.create_table(searchFrame, columns, height=12)
@@ -225,7 +229,8 @@ class EbookDownloader:
         self.page_var.trace_add("write", self.on_page_select)
 
         # Download Queue Table
-        columns = {'Filename': 455, 'Size': 75, 'Mirror': 50, 'Progress': 60, 'Status': 100, 'Speed': 90, 'ETA': 50}
+        columns = {'DL-ID': 50, 'BK-ID': 80, 'Filename': 325, 'Size': 75, 'Mirror': 50, 'Progress': 60, 'Status': 100,
+                   'Speed': 90, 'ETA': 50}
         downloadFrame = tk.LabelFrame(self.root, text='Download')
         downloadFrame.grid(row=1, column=0, padx=(15, 0), pady=(10, 0), sticky='nsw')
         self.download_tree = self.create_table(downloadFrame, columns, anchor='center', height=12)
@@ -576,9 +581,10 @@ class EbookDownloader:
         return tree
 
     # TODO: change function name
-    def thread_func(self, item, mirror):
+    def thread_func(self, download_id, item, mirror):
         # TODO: only retrieve info that are needed
         book_id, title, authors, publisher, year, language, pages, size, ext = self.search_tree.item(item, "values")
+        self.gui_update_queue.put((download_id, book_id, "-", "-", mirror, "0%", "Waiting", "-", "-"))
 
         # Ref.: https://github.com/carterprince/libby/blob/main/libby
         nb_retries1 = 0
@@ -590,17 +596,27 @@ class EbookDownloader:
             if not next_step:
                 mirror_url = self.books[book_id]['mirrors'][mirror]
                 # TODO: catch `requests.exceptions.SSLError` e.g. 504 Gateway Time-out
-                mirror_response = requests.get(mirror_url, headers=self.headers)
+                # TODO: catch `requests.exceptions.ConnectionError` and `urllib3.exceptions.MaxRetryError`
+                try:
+                    mirror_response = requests.get(mirror_url, headers=self.headers)
+                except requests.exceptions.SSLError:
+                    mirror_response = -1
                 if mirror_response.status_code != 200:
+                    # e.g. if status_code = 404 => The requested file isn't found.
                     # TODO: code factorization
+                    if mirror_response.status_code == 404:
+                        extra_msg = ", 'The requested file isn't found.'"
+                    else:
+                        extra_msg = ""
                     nb_retries1 += 1
-                    msg = "Thread: couldn't process mirror URL"
-                    if nb_retries1 == self.max_retries:
+                    msg = "Thread: couldn't process mirror URL [HTTP status code: " \
+                          f"{mirror_response.status_code}{extra_msg}]"
+                    if nb_retries1 <= self.max_retries:
                         self.gui_update_queue.put((msg + ". Will retry again.", "warning"))
                         self.gui_update_queue.put((f"Thread: sleeping [retry1={nb_retries1}] ...", "debug"))
                         time.sleep(self.delay_between_retries)
                     else:
-                        self.gui_update_queue.put((msg, "warning"))
+                        self.gui_update_queue.put((msg, "error"))
                 else:
                     mirror_soup = BeautifulSoup(mirror_response.text, "html.parser")
                     next_step = True
@@ -608,42 +624,68 @@ class EbookDownloader:
                 try:
                     assert mirror_soup
                     download_url = mirror_soup.find("a", string="GET")["href"].replace("\get.php", "/get.php")
-                    break
                 except TypeError:
                     # e.g. TypeError: 'NoneType' object is not subscriptable
                     nb_retries2 += 1
                     msg = "Thread: Couldn't find download URL"
-                    if nb_retries2 == self.max_retries:
+                    if nb_retries2 <= self.max_retries:
                         self.gui_update_queue.put((msg + ". Will retry again.", "warning"))
                         self.gui_update_queue.put((f"Sleeping [retry2={nb_retries2}] ...", "debug"))
                         time.sleep(self.delay_between_retries)
                     else:
-                        self.gui_update_queue.put((msg, "warning"))
+                        self.gui_update_queue.put((msg, "error"))
+                else:
+                    break
 
         if nb_retries1 > self.max_retries or nb_retries2 > self.max_retries:
-            self.gui_update_queue.put((f"Thread: skipped mirror URL: {mirror_url}", "warning"))
+            if nb_retries1 > self.max_retries:
+                self.gui_update_queue.put((f"Thread: skipped mirror URL [{mirror_response.status_code}]: "
+                                           f"{mirror_url}", "warning"))
+            else:
+                self.gui_update_queue.put((f"Thread: skipped mirror URL: {mirror_url}", "warning"))
+            self.gui_update_queue.put((download_id, book_id, "-", "-", mirror, "0%", "Canceled", "-", "-"))
             return
 
         assert download_url
         nb_retries = 0
         download_response = None
         while nb_retries <= self.max_retries:
-            download_response = requests.get(download_url, headers=self.headers, stream=True)
+            # TODO: catch `requests.exceptions.SSLError` e.g. 504 Gateway Time-out
+            # IMPORTANT TODO: remove verify, only used for testing
+            try:
+                download_response = requests.get(download_url, headers=self.headers, stream=True)
+            except requests.exceptions.SSLError:
+                self.gui_update_queue.put((f"Thread: server's certificate has expired", "warning"))
+                # TODO: add option if user wants to bypass SSL certificate
+                self.gui_update_queue.put((f"Thread: bypassing SSL certificate verification", "warning"))
+                download_response = requests.get(download_url, headers=self.headers, stream=True, verify=False)
             if download_response.status_code != 200:
+                # e.g. if status code is 500, it could be that the file is not found:
+                #      Error: "File not found. The repositories may not be synchronized, try downloading later"
+                #      if status code is 521, Web server is down
+                # TODO: code factorization
+                if download_response.status_code == 500:
+                    extra_msg = ", 'File not found. The repositories may not be synchronized, try downloading later.'"
+                elif download_response.status_code == 521:
+                    extra_msg = ", 'Web server is down'"
+                else:
+                    extra_msg = ""
                 nb_retries += 1
-                msg = "Thread: couldn't process download URL"
-                if nb_retries == self.max_retries:
+                msg = "Thread: couldn't process download URL [HTTP status code: " \
+                      f"{download_response.status_code}{extra_msg}]"
+                if nb_retries <= self.max_retries:
                     self.gui_update_queue.put((msg + ". Will retry again.", "warning"))
                     self.gui_update_queue.put((f"Thread: sleeping [retry={nb_retries}] ...", "debug"))
                     time.sleep(self.delay_between_retries)
                 else:
-                    self.gui_update_queue.put((msg, "warning"))
+                    self.gui_update_queue.put((msg, "error"))
             else:
                 break
 
         if nb_retries > self.max_retries:
-            self.gui_update_queue.put((f"Thread: skipped download URL [{download_response.status_code}]: {download_url}",
-                                       "warning"))
+            self.gui_update_queue.put((f"Thread: skipped download URL [{download_response.status_code}]: "
+                                       f"{download_url}", "warning"))
+            self.gui_update_queue.put((download_id, book_id, "-", "-", mirror, "0%", "Canceled", "-", "-"))
             return
         else:
             # TODO: necessary?
@@ -654,7 +696,7 @@ class EbookDownloader:
         filepath = unique_filename(Path.cwd(), pyrfc6266.requests_response_to_filename(download_response))
         filename = Path(filepath).name
         self.gui_update_queue.put((f"Thread: filename={Path(filepath).name}", "debug"))
-        self.gui_update_queue.put((filename, size, mirror, "0%", "Waiting", "-", "-"))
+        self.gui_update_queue.put((download_id, book_id, filename, size, mirror, "0%", "Waiting", "-", "-"))
         self.filenames.setdefault(filename,
                                   {'book_id': book_id,
                                    'download_url': download_url})
@@ -669,7 +711,8 @@ class EbookDownloader:
         # Start download in a separate thread
         if not add_to_queue and self.shared_nb_threads < 6:
             th_name = f"Thread-{self.shared_nb_threads + 1}"
-            thread = threading.Thread(target=self.download_ebook, args=(filename, size, mirror, th_name, download_url))
+            thread = threading.Thread(target=self.download_ebook,
+                                      args=(download_id, book_id, filename, size, mirror, th_name, download_url))
             thread.daemon = True
             thread.start()
             with self.lock_nb_threads:
@@ -680,22 +723,22 @@ class EbookDownloader:
             self.gui_update_queue.put((
                 f"Adding work to download queue: filename={filename} and mirror={mirror}", "debug"))
             with self.lock_download_queue:
-                self.shared_download_queue.append((filename, size, mirror))
+                self.shared_download_queue.append((download_id, book_id, filename, size, mirror))
 
     def download_selected(self, mirror):
         logger.debug(f"Downloading {len(self.selected_items_from_search_tree)} file(s) with mirror={mirror}")
         # One thread per item selected from the Search table
         for item in self.selected_items_from_search_tree:
-            threading.Thread(target=self.thread_func, args=(item, mirror), daemon=True).start()
+            threading.Thread(target=self.thread_func, args=(self.download_ids, item, mirror), daemon=True).start()
+            self.download_ids += 1
 
     # Worker thread
-    # TODO: change function to know it is thread-related
+    # TODO: change function name to know it is thread-related
     # IMPORTANT: within a thread, you can't use `logger`, you must use `gui_update_queue` since it is the main thread
     # that is in charge of logging directly to the logs widget
-    def download_ebook(self, filename, size, mirror, th_name, download_url):
+    def download_ebook(self, download_id, book_id, filename, size, mirror, th_name, download_url):
         thread = threading.current_thread()
         thread.setName(th_name)
-        stop = False
         self.gui_update_queue.put((f"{th_name}: starting first download "
                                    f"with filename={filename} and mirror={mirror}", "debug"))
         while True:
@@ -704,20 +747,33 @@ class EbookDownloader:
             # TODO: code factorization
             nb_retries = 0
             download_response = None
-            # Create a session
-            # TODO: session necessary?
-            session = requests.Session()
             while nb_retries <= self.max_retries:
-                download_response = session.get(download_url, headers=self.headers, stream=True)
+                # TODO: catch `requests.exceptions.SSLError` e.g. 504 Gateway Time-out
+                try:
+                    download_response = requests.get(download_url, headers=self.headers, stream=True)
+                except requests.exceptions.SSLError:
+                    self.gui_update_queue.put((f"{th_name}: server's certificate has expired", "warning"))
+                    # TODO: add option if user wants to bypass SSL certificate
+                    self.gui_update_queue.put((f"{th_name}: bypassing SSL certificate verification", "warning"))
+                    download_response = requests.get(download_url, headers=self.headers, stream=True, verify=False)
                 if download_response.status_code != 200:
+                    # e.g. 503: Service Unavailable, see https://en.wikipedia.org/wiki/List_of_HTTP_status_codes
+                    if download_response.status_code == 500:
+                        extra_msg = ", 'File not found. The repositories may not be synchronized, " \
+                                    "try downloading later.'"
+                    elif download_response.status_code == 521:
+                        extra_msg = ", 'Web server is down'"
+                    else:
+                        extra_msg = ""
                     nb_retries += 1
-                    msg = "Couldn't process download URL"
-                    if nb_retries == self.max_retries:
+                    msg = "Couldn't process download URL [HTTP status code: " \
+                          f"{download_response.status_code}{extra_msg}]"
+                    if nb_retries <= self.max_retries:
                         self.gui_update_queue.put((f"{th_name}: {msg}. Will retry again.", "warning"))
                         self.gui_update_queue.put((f"{th_name}: sleeping [retry={nb_retries}] ...", "debug"))
                         time.sleep(self.delay_between_retries)
                     else:
-                        self.gui_update_queue.put((f"{th_name}: {msg}", "warning"))
+                        self.gui_update_queue.put((f"{th_name}: {msg}", "error"))
                     time.sleep(self.delay_between_retries)
                 else:
                     break
@@ -726,6 +782,7 @@ class EbookDownloader:
             total_size = ""
             size_downloaded = "0 MB"
             bytes_so_far = [0]
+            stop = False
             incomplete = False
             if nb_retries > self.max_retries:
                 self.gui_update_queue.put(
@@ -742,7 +799,9 @@ class EbookDownloader:
                 # TODO: test if file error (e.g. directory doesn't exist)
                 with open(Path.cwd().joinpath(filename), "wb") as f:
                     start_time = time.time()
-                    for chunk in download_response.iter_content(chunk_size=self.chunk_size):
+                    for chunk in download_response.iter_content(chunk_size=1*1024):
+                        if not chunk:
+                            continue
                         f.write(chunk)
                         bytes_so_far[0] += len(chunk)
 
@@ -758,7 +817,8 @@ class EbookDownloader:
                         download_speed_formatted = self.format_size(download_speed) + '/s'
                         size_downloaded = self.format_size(bytes_so_far[0])
 
-                        self.gui_update_queue.put((filename, size_downloaded, mirror, f"{percentage_completion:.2f}%",
+                        self.gui_update_queue.put((download_id, book_id, filename, size_downloaded, mirror,
+                                                   f"{percentage_completion:.2f}%",
                                                    "Downloading", f"{download_speed_formatted}",
                                                    f"{eta_formatted}"))
 
@@ -776,16 +836,15 @@ class EbookDownloader:
                             if th_name in self.shared_pause_thread:
                                 self.gui_update_queue.put((f"{th_name}: thread will pause what it is doing", "debug"))
                                 self.gui_update_queue.put(
-                                    (filename, size, mirror, f"{percentage_completion}%", "Paused", "-", "-"))
+                                    (download_id, book_id, filename, size_downloaded, mirror,
+                                     f"{percentage_completion}%", "Paused", "-", "-"))
                                 self.shared_pause_thread.remove(th_name)
                                 pause = True
 
                         # Resume thread
                         if pause:
                             while True:
-                                # self.gui_update_queue.put((f"{th_name}: thread will sleep", "debug"))
                                 time.sleep(0.1)
-                                # self.gui_update_queue.put((f"{th_name}: thread will check if it can resume", "debug"))
                                 with self.lock_resume_thread:
                                     if th_name in self.shared_resume_thread:
                                         self.gui_update_queue.put(
@@ -805,31 +864,31 @@ class EbookDownloader:
 
                     # Incomplete download
                     if not stop and total_size != bytes_so_far[0]:
-                        # TODO IMPORTANT: add retry in this case
+                        # IMPORTANT TODO: add retry in this case
                         self.gui_update_queue.put((f"{th_name}: could only complete {percentage_completion:.2f}% of "
                                                    "the whole download.", "error"))
                         incomplete = True
 
-            session.close()
+            download_response.close()
+
             if incomplete:
                 if Path.cwd().joinpath(filename).exists():
                     self.remove_file(Path.cwd().joinpath(filename))
                 self.gui_update_queue.put(
-                    (filename, "-", mirror, f"{percentage_completion:.2f}%", "Incomplete", "-", "-"))
+                    (download_id, book_id, filename, "-", mirror, f"{percentage_completion:.2f}%", "Incomplete", "-", "-"))
             elif stop:
                 if Path.cwd().joinpath(filename).exists():
                     self.remove_file(Path.cwd().joinpath(filename))
-                stop = False
                 self.gui_update_queue.put(
-                    (filename, "-", mirror, f"{percentage_completion:.2f}%", "Canceled", "-", "-"))
+                    (download_id, book_id, filename, "-", mirror, f"{percentage_completion:.2f}%", "Canceled", "-", "-"))
             else:
                 # Update status to indicate download completion
-                self.gui_update_queue.put((f"{th_name}: {percentage_completion:.2f}%, {total_size}, {size_downloaded}, "
-                                           f"{bytes_so_far[0]}", "warning"))
-                self.gui_update_queue.put((f"{th_name}: finished downloading "
-                                           "and updating status with "
-                                           f"filename={filename} and {mirror}", "debug"))
-                self.gui_update_queue.put((filename, size_downloaded, mirror, "100%", "Downloaded", "-", "-"))
+                self.gui_update_queue.put((f"{th_name}: {percentage_completion:.2f}%, {total_size} B, "
+                                           f"{size_downloaded}, {bytes_so_far[0]} B", "debug"))
+                self.gui_update_queue.put((f"{th_name}: finished downloading and updating status with "
+                                           f"BK-ID={book_id} and mirror={mirror}", "debug"))
+                self.gui_update_queue.put((download_id, book_id, filename, size_downloaded, mirror, "100%",
+                                           "Downloaded", "-", "-"))
 
             self.update_mirror_counter_with_lock(mirror, -1)
             self.gui_update_queue.put((f"{th_name}: thread waiting for work...", "debug"))
@@ -838,11 +897,11 @@ class EbookDownloader:
                 # i.e. the least recent ebook added
                 if self.shared_download_queue:
                     with self.lock_download_queue:
-                        _, _, mirror = self.shared_download_queue[0]
+                        _, _, _, _, mirror = self.shared_download_queue[0]
                     # TODO: use lock for reading shared_nb_mirror1 and shared_nb_mirror2?
                     with self.get_mirror_lock(mirror):
                         if mirror == 1 and self.shared_nb_mirror1 < 3 or mirror == 2 and self.shared_nb_mirror2 < 3:
-                            filename, size, mirror = self.shared_download_queue.pop(0)
+                            download_id, book_id, filename, size, mirror = self.shared_download_queue.pop(0)
                             self.update_mirror_counter_without_lock(mirror, 1)
                             break
                 else:
@@ -895,18 +954,17 @@ class EbookDownloader:
         else:
             return self.lock_mirror2
 
-    def update_download_status(self, filename, size, mirror, progress, status, speed="", eta=""):
+    def update_download_status(self, download_id, book_id, filename, size, mirror, progress, status, speed="", eta=""):
         # Update status and progress in the download queue table
         for child in self.download_tree.get_children():
-            if self.download_tree.item(child, 'values')[0] == filename:
-                try:
-                    self.download_tree.item(child, values=(filename, size, mirror, progress, status, speed, eta))
-                except:
-                    # TODO: remove try-except block
-                    ipdb.set_trace()
+            if int(self.download_tree.item(child, 'values')[0]) == download_id:
+                self.download_tree.item(child,
+                                        values=(download_id, book_id, filename, size, mirror, progress, status, speed,
+                                                eta))
                 return
         # New item
-        self.download_tree.insert("", "end", values=(filename, size, mirror, progress, status, speed, eta))
+        self.download_tree.insert("", "end",
+                                  values=(download_id, book_id, filename, size, mirror, progress, status, speed, eta))
 
     @staticmethod
     def update_log_table(msg, log_level):
@@ -986,19 +1044,26 @@ class EbookDownloader:
             logger.debug("Pause Download")
             for item in self.selected_items_from_download_tree:
                 values = self.download_tree.item(item, 'values')
-                filename = values[0]
-                status = values[4]
+                # TODO: use an interface to get filename, status, ... from values
+                # e.g. values = get_values_from_download_tree(item)
+                #      filename = values['filename']
+                #      status = values['status']
+                download_id = values[0]
+                filename = values[2]
+                status = values[6]
+                item_id = f'DL-ID={download_id}'
                 if status == 'Downloading':
+                    assert filename != '-'
                     logger.debug(f"Pausing {filename}")
                     if self.filenames_by_threads.get(filename, False):
                         thread = self.filenames_by_threads[filename]
                         with self.lock_pause_thread:
                             self.shared_pause_thread.add(thread.name)
                     else:
-                        logger.warning(f"{filename} couldn't be paused!")
+                        logger.warning(f"{item_id} couldn't be paused!")
                 else:
-                    logger.debug(f"{filename}: not downloading")
-                    logger.debug(f"{filename}: its status='{status}'")
+                    logger.debug(f"{item_id}: not downloading")
+                    logger.debug(f"{item_id}: its status='{status}'")
             self.selected_items_from_download_tree.clear()
             # Remove highlighting
             self.download_tree.selection_remove(self.download_tree.selection())
@@ -1012,19 +1077,22 @@ class EbookDownloader:
             logger.debug("Resume Download")
             for item in self.selected_items_from_download_tree:
                 values = self.download_tree.item(item, 'values')
-                filename = values[0]
-                status = values[4]
+                download_id = values[0]
+                filename = values[2]
+                status = values[6]
+                item_id = f'DL-ID={download_id}'
                 if status == 'Paused':
+                    assert filename != '-'
                     logger.debug(f"Resuming {filename}")
                     if self.filenames_by_threads.get(filename, False):
                         thread = self.filenames_by_threads[filename]
                         with self.lock_resume_thread:
                             self.shared_resume_thread.add(thread.name)
                     else:
-                        logger.warning(f"{filename} couldn't be resumed!")
+                        logger.warning(f"{item_id} couldn't be resumed!")
                 else:
-                    logger.debug(f"{filename}: not paused")
-                    logger.debug(f"{filename}: its status='{status}'")
+                    logger.debug(f"{item_id}: not paused")
+                    logger.debug(f"{item_id}: its status='{status}'")
             self.selected_items_from_download_tree.clear()
             # Remove highlighting
             self.download_tree.selection_remove(self.download_tree.selection())
@@ -1038,9 +1106,12 @@ class EbookDownloader:
             logger.debug("Cancel items from the Download queue")
             for item in self.selected_items_from_download_tree:
                 values = self.download_tree.item(item, 'values')
-                filename = values[0]
-                status = values[4]
+                download_id = values[0]
+                filename = values[2]
+                status = values[6]
+                item_id = f'DL-ID={download_id}'
                 if status in ['Downloading', 'Paused']:
+                    assert filename != '-'
                     logger.debug(f"Canceling {filename}")
                     if self.filenames_by_threads.get(filename, False):
                         thread = self.filenames_by_threads[filename]
@@ -1048,10 +1119,10 @@ class EbookDownloader:
                             self.shared_stop_thread.add(thread.name)
                         del self.filenames_by_threads[filename]
                     else:
-                        logger.warning(f"{filename} couldn't be canceled!")
+                        logger.warning(f"{item_id} couldn't be canceled!")
                 else:
-                    logger.debug(f"{filename}: not downloading")
-                    logger.debug(f"{filename}: its status='{status}'")
+                    logger.debug(f"{item_id}: not downloading")
+                    logger.debug(f"{item_id}: its status='{status}'")
             self.selected_items_from_download_tree.clear()
             # Remove highlighting
             self.download_tree.selection_remove(self.download_tree.selection())
@@ -1063,16 +1134,18 @@ class EbookDownloader:
             logger.debug("Clear downloads")
             for child in self.download_tree.get_children():
                 values = self.download_tree.item(child, 'values')
-                filename = values[0]
-                status = values[4]
+                download_id = values[0]
+                filename = values[2]
+                status = values[6]
+                item_id = f'DL-ID={download_id}'
                 if status != 'Downloading':
-                    logger.debug(f"Removing {filename}")
+                    logger.debug(f"Removing {item_id}")
                     if self.filenames_by_threads.get(filename, False):
                         del self.filenames_by_threads[filename]
                     self.download_tree.delete(child)
                 else:
-                    logger.debug(f"{filename}: it can't be removed because its download has not completed")
-                    logger.debug(f"{filename}: its status='{status}'")
+                    logger.debug(f"{item_id}: it can't be removed because its download has not completed")
+                    logger.debug(f"{item_id}: its status='{status}'")
 
     def remove_download(self):
         if self.download_tree.get_children() == ():
@@ -1083,16 +1156,18 @@ class EbookDownloader:
             logger.debug("Remove items from the Download queue")
             for item in self.selected_items_from_download_tree:
                 values = self.download_tree.item(item, "values")
-                filename = values[0]
-                status = values[4]
+                download_id = values[0]
+                filename = values[2]
+                status = values[6]
+                item_id = f'DL-ID={download_id}'
                 if status not in ["Downloading", "Paused"]:
-                    logger.debug(f"Removing {filename}")
+                    logger.debug(f"Removing {item_id}")
                     if self.filenames_by_threads.get(filename, False):
                         del self.filenames_by_threads[filename]
                     self.download_tree.delete(item)
                 else:
-                    logger.debug(f"{filename}: it can't be removed because its download has not completed")
-                    logger.debug(f"{filename}: its status='{status}'")
+                    logger.debug(f"{item_id}: it can't be removed because its download has not completed")
+                    logger.debug(f"{item_id}: its status='{status}'")
             self.selected_items_from_download_tree.clear()
             # Remove highlighting
             self.download_tree.selection_remove(self.download_tree.selection())
